@@ -61,31 +61,16 @@ export default function Signup() {
         }
       }
 
-      // 2. Create the company
-      const { data: company, error: companyError } = await supabase
-        .from("companies")
-        .insert({ name, timezone: tz })
-        .select("id")
-        .single();
-
-      if (companyError) {
-        setError(companyError.message);
-        setLoading(false);
-        return;
-      }
-
-      // 3. Create owner membership
-      const { error: memberError } = await supabase
-        .from("memberships")
-        .insert({
-          user_id: userId,
-          company_id: company.id,
-          role: "owner",
-          email,
+      // 2. Create company + owner membership via security-definer function
+      const { error: wsError } = await supabase
+        .rpc("create_workspace", {
+          company_name: name,
+          company_tz: tz,
+          owner_email: email,
         });
 
-      if (memberError) {
-        setError(memberError.message);
+      if (wsError) {
+        setError(wsError.message);
         setLoading(false);
         return;
       }
