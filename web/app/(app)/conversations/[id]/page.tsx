@@ -1,32 +1,194 @@
 "use client";
-import { useState } from "react";
-import { demoConversation } from "@/lib/data";
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { createClient } from "../../../lib/supabase";
+import { getCompanyId, apiFetch } from "../../../lib/api";
+import { isDemo, demoConversation, type LeadRow, type Turn, type Score } from "../../../lib/data";
+
+const langLabels: Record<string, string> = {
+  en: "English", fa: "\u0641\u0627\u0631\u0633\u06CC \u00B7 Farsi", zh: "\u4E2D\u6587 \u00B7 Mandarin",
+  pa: "\u0A2A\u0A70\u0A1C\u0A3E\u0A2C\u0A40 \u00B7 Punjabi", ar: "\u0627\u0644\u0639\u0631\u0628\u064A\u0629 \u00B7 Arabic",
+  hi: "\u0939\u093F\u0928\u094D\u0926\u0940 \u00B7 Hindi", es: "Espa\u00F1ol \u00B7 Spanish",
+  fr: "Fran\u00E7ais \u00B7 French",
+};
+
+function mapLead(r: any): LeadRow {
+  const lang = r.detected_language || "en";
+  const score: Score = r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : "cold";
+  return {
+    id: r.id,
+    name: r.name || "Unknown",
+    project: r.projects?.name || r.project_name || "",
+    source: r.source === "google" ? "google" : "meta",
+    status: r.status || "new",
+    channel: r.channel || "whatsapp",
+    language: lang,
+    langLabel: langLabels[lang] || lang,
+    score,
+    scoreReason: r.score_reason || "",
+    receivedAt: r.created_at
+      ? new Date(r.created_at).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+      : "",
+  };
+}
+
+function mapTurn(m: any): Turn {
+  let role: Turn["role"] = "ai";
+  if (m.direction === "inbound") role = "lead";
+  else if (m.sender_type === "agent" || m.sender_type === "human") role = "agent";
+  else if (m.sender_type === "system") role = "system";
+
+  return {
+    id: m.id,
+    role,
+    text: m.body || m.text || "",
+    gloss: m.gloss || undefined,
+    at: m.created_at
+      ? new Date(m.created_at).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+      : "",
+  };
+}
 
 export default function Conversation() {
-  const { lead } = demoConversation;
-  const [mode, setMode] = useState<"ai" | "human">(demoConversation.status);
-  const [turns, setTurns] = useState(demoConversation.turns);
-  const [draft, setDraft] = useState("");
+  const params = useParams();
+  const id = params?.id as string;
 
-  function takeOver() {
-    // Live: POST `${API_URL}/agent/conversations/${id}/takeover` — pauses the AI worker
+  const [lead, setLead] = useState<LeadRow>(demoConversation.lead);
+  const [mode, setMode] = useState<"ai" | "human">(demoConversation.status);
+  const [turns, setTurns] = useState<Turn[]>(demoConversation.turns);
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(!isDemo);
+
+  useEffect(() => {
+    if (isDemo) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const companyId = await getCompanyId();
+        if (!companyId) { setLoading(false); return; }
+        const supabase = createClient();
+
+        // Fetch lead
+        const { data: leadData } = await supabase
+          .from("leads")
+          .select("*, projects(name)")
+          .eq("id", id)
+          .single();
+
+        if (leadData && !cancelled) {
+          setLead(mapLead(leadData));
+          setMode(leadData.takeover ? "human" : "ai");
+        }
+
+        // Fetch conversation messages
+        // First find the conversation for this lead
+        const { data: convData } = await supabase
+          .from("conversations")
+          .select("id, takeover")
+          .eq("lead_id", id)
+          .limit(1)
+          .single();
+
+        if (convData) {
+          if (!cancelled) setMode(convData.takeover ? "human" : "ai");
+          const { data: msgs } = await supabase
+            .from("messages")
+            .select("*")
+            .eq("conversation_id", convData.id)
+            .order("created_at", { ascending: true });
+
+          if (msgs && !cancelled) {
+            setTurns(msgs.map(mapTurn));
+          }
+        }
+      } catch {
+        // keep demo data as fallback
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  async function takeOver() {
+    if (!isDemo) {
+      try {
+        // Find conversation id for this lead
+        const supabase = createClient();
+        const { data: convData } = await supabase
+          .from("conversations")
+          .select("id")
+          .eq("lead_id", id)
+          .limit(1)
+          .single();
+        if (convData) {
+          await apiFetch(`/agent/conversations/${convData.id}/takeover`, { method: "POST" });
+        }
+      } catch {
+        // proceed with local state update even if API fails
+      }
+    }
     setMode("human");
     setTurns((t) => [...t, {
       id: `sys-${Date.now()}`, role: "system",
-      text: `You took over this conversation · AI paused`, at: "now",
+      text: `You took over this conversation \u00B7 AI paused`, at: "now",
     }]);
   }
 
-  function handBack() {
+  async function handBack() {
+    if (!isDemo) {
+      try {
+        const supabase = createClient();
+        const { data: convData } = await supabase
+          .from("conversations")
+          .select("id")
+          .eq("lead_id", id)
+          .limit(1)
+          .single();
+        if (convData) {
+          await apiFetch(`/agent/conversations/${convData.id}/handback`, { method: "POST" });
+        }
+      } catch {
+        // proceed with local state update
+      }
+    }
     setMode("ai");
     setTurns((t) => [...t, { id: `sys-${Date.now()}`, role: "system", text: "Handed back to AI", at: "now" }]);
   }
 
-  function send() {
+  async function send() {
     if (!draft.trim()) return;
-    // Live: POST `${API_URL}/agent/messages` — relayed out the same WhatsApp number
-    setTurns((t) => [...t, { id: `a-${Date.now()}`, role: "agent", text: draft.trim(), at: "now" }]);
+    const text = draft.trim();
+    if (!isDemo) {
+      try {
+        const supabase = createClient();
+        const { data: convData } = await supabase
+          .from("conversations")
+          .select("id")
+          .eq("lead_id", id)
+          .limit(1)
+          .single();
+        if (convData) {
+          await apiFetch("/agent/messages", {
+            method: "POST",
+            body: JSON.stringify({ conversation_id: convData.id, text }),
+          });
+        }
+      } catch {
+        // still show the message locally
+      }
+    }
+    setTurns((t) => [...t, { id: `a-${Date.now()}`, role: "agent", text, at: "now" }]);
     setDraft("");
+  }
+
+  if (loading) {
+    return (
+      <>
+        <h1 className="page-title">Loading...</h1>
+        <p className="page-sub" style={{ color: "var(--muted)" }}>Fetching conversation</p>
+      </>
+    );
   }
 
   return (
@@ -109,7 +271,7 @@ export default function Conversation() {
 
       <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 12 }}>
         Foreign-language messages show an English gloss so anyone on the team can triage.
-        The AI always replies in the lead’s language.
+        The AI always replies in the lead's language.
       </p>
     </>
   );

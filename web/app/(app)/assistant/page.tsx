@@ -1,5 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { isDemo } from "@/lib/data";
+import { apiFetch } from "@/lib/api";
 
 interface Msg { role: "user" | "assistant"; text: string; tools?: string }
 
@@ -21,13 +23,56 @@ const seed: Msg[] = [
 export default function Assistant() {
   const [msgs, setMsgs] = useState<Msg[]>(seed);
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const threadId = useRef<string | null>(null);
 
-  function send() {
-    if (!draft.trim()) return;
-    // Live: POST /assistant/threads/:id/messages — companyId comes from the session, never the client
-    setMsgs((m) => [...m, { role: "user", text: draft.trim() },
-      { role: "assistant", text: "Demo mode — connect Supabase and the API to query your real leads." }]);
+  async function send() {
+    if (!draft.trim() || sending) return;
+    const userText = draft.trim();
+    setMsgs((m) => [...m, { role: "user", text: userText }]);
     setDraft("");
+
+    if (isDemo) {
+      setMsgs((m) => [...m, { role: "assistant", text: "Demo mode — connect Supabase and the API to query your real leads." }]);
+      return;
+    }
+
+    setSending(true);
+    try {
+      // Create thread on first real message
+      if (!threadId.current) {
+        const res = await apiFetch("/assistant/threads", {
+          method: "POST",
+          body: JSON.stringify({ title: userText.slice(0, 80) }),
+        });
+        if (!res.ok) throw new Error("thread creation failed");
+        const data = await res.json();
+        threadId.current = data.id;
+      }
+
+      const res = await apiFetch(`/assistant/threads/${threadId.current}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ text: userText }),
+      });
+      if (!res.ok) throw new Error("assistant call failed");
+      const data = await res.json();
+
+      const toolSummary = (data.toolActivity ?? [])
+        .map((t: any) => t.name ?? t.tool)
+        .filter(Boolean)
+        .join(" · ");
+
+      setMsgs((m) => [...m, {
+        role: "assistant",
+        text: data.answer,
+        tools: toolSummary || undefined,
+      }]);
+    } catch (e) {
+      console.error("Assistant error", e);
+      setMsgs((m) => [...m, { role: "assistant", text: "Something went wrong — please try again." }]);
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -50,7 +95,7 @@ export default function Assistant() {
         <div className="composer">
           <input value={draft} placeholder='Try "how many leads per project last week?"'
             onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} />
-          <button className="btn btn-primary" onClick={send}>Ask</button>
+          <button className="btn btn-primary" onClick={send} disabled={sending}>{sending ? "…" : "Ask"}</button>
         </div>
       </div>
     </>

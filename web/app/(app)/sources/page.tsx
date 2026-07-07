@@ -1,17 +1,24 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { isDemo } from "@/lib/data";
+import { apiFetch } from "@/lib/api";
 
-const projects = ["The Riv — Vaughan", "Union East — Scarborough", "Harbourline — Mississauga", "Lakeview — Pickering"];
+const demoProjects = [
+  { id: "p1", name: "The Riv — Vaughan" },
+  { id: "p2", name: "Union East — Scarborough" },
+  { id: "p3", name: "Harbourline — Mississauga" },
+  { id: "p4", name: "Lakeview — Pickering" },
+];
 
 const seed = {
   unmapped24h: 3,
   meta: {
     label: "Northgate Realty page · webhook subscribed · token healthy",
     forms: [
-      { id: "form_887123", name: "The Riv — July 5% Deposit", leads: 61, last: "2h ago", project: "The Riv — Vaughan" },
-      { id: "form_887124", name: "Union East — Transit Living", leads: 44, last: "38m ago", project: "Union East — Scarborough" },
-      { id: "form_887125", name: "Harbourline — Waterfront", leads: 29, last: "Yesterday", project: "Harbourline — Mississauga" },
-      { id: "form_887126", name: "GTA Pre-Con — General", leads: 3, last: "1h ago", project: "" },
+      { id: "form_887123", name: "The Riv — July 5% Deposit", leads: 61, last: "2h ago", project: "The Riv — Vaughan", project_id: "p1" },
+      { id: "form_887124", name: "Union East — Transit Living", leads: 44, last: "38m ago", project: "Union East — Scarborough", project_id: "p2" },
+      { id: "form_887125", name: "Harbourline — Waterfront", leads: 29, last: "Yesterday", project: "Harbourline — Mississauga", project_id: "p3" },
+      { id: "form_887126", name: "GTA Pre-Con — General", leads: 3, last: "1h ago", project: "", project_id: "" },
     ],
   },
   google: [
@@ -20,14 +27,95 @@ const seed = {
   ],
 };
 
-export default function Sources() {
-  const [forms, setForms] = useState(seed.meta.forms);
-  const unmappedNow = forms.filter((f) => !f.project).length;
+interface FormRow { id: string; name: string; leads: number; last: string; project: string; project_id: string }
+interface SourceRow { id: string; provider: string; label: string; webhook_url: string | null; test_received_at: string | null; forms: FormRow[] }
+interface ProjectOption { id: string; name: string }
 
-  function setMapping(id: string, project: string) {
-    // Live: PATCH /sources/:id/mapping { form_id, project_id } — also retro-maps recent unmapped leads
-    setForms((fs) => fs.map((f) => (f.id === id ? { ...f, project } : f)));
+export default function Sources() {
+  const [metaSources, setMetaSources] = useState<SourceRow[]>([]);
+  const [googleSources, setGoogleSources] = useState<SourceRow[]>([]);
+  const [projects, setProjectsList] = useState<ProjectOption[]>(demoProjects);
+  const [unmapped24h, setUnmapped24h] = useState(seed.unmapped24h);
+  const [forms, setForms] = useState(seed.meta.forms);
+  const [loading, setLoading] = useState(!isDemo);
+  const [live, setLive] = useState(false);
+
+  const fetchSources = useCallback(async () => {
+    if (isDemo) return;
+    try {
+      const res = await apiFetch("/sources");
+      if (!res.ok) throw new Error("fetch failed");
+      const data = await res.json();
+      const meta: SourceRow[] = [];
+      const google: SourceRow[] = [];
+      for (const src of data.sources ?? []) {
+        const mapped: SourceRow = {
+          id: src.id,
+          provider: src.provider,
+          label: src.label,
+          webhook_url: src.webhook_url,
+          test_received_at: src.test_received_at,
+          forms: (src.forms ?? []).map((f: any) => ({
+            id: f.form_id,
+            name: f.name ?? f.form_id,
+            leads: f.leads_30d ?? 0,
+            last: f.last_lead_at ? timeAgo(f.last_lead_at) : "—",
+            project: f.project_id ? (data.projects ?? []).find((p: any) => p.id === f.project_id)?.name ?? "" : "",
+            project_id: f.project_id ?? "",
+          })),
+        };
+        if (src.provider === "meta") meta.push(mapped);
+        else google.push(mapped);
+      }
+      setMetaSources(meta);
+      setGoogleSources(google);
+      setProjectsList((data.projects ?? []).map((p: any) => ({ id: p.id, name: `${p.name}${p.city ? ` — ${p.city}` : ""}` })));
+      setUnmapped24h(data.unmapped_24h ?? 0);
+      // Flatten meta forms for the table
+      if (meta.length > 0) {
+        setForms(meta.flatMap((s) => s.forms));
+      }
+      setLive(true);
+    } catch (e) {
+      console.error("Failed to fetch sources, using demo data", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchSources(); }, [fetchSources]);
+
+  function timeAgo(iso: string) {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return "Yesterday";
   }
+
+  async function setMapping(formId: string, projectId: string) {
+    // Optimistic update
+    const projectName = projects.find((p) => p.id === projectId)?.name ?? "";
+    setForms((fs) => fs.map((f) => (f.id === formId ? { ...f, project: projectName, project_id: projectId } : f)));
+
+    if (isDemo || !live) return;
+
+    // Find which source owns this form
+    const source = metaSources.find((s) => s.forms.some((f) => f.id === formId));
+    if (!source) return;
+
+    try {
+      await apiFetch(`/sources/${source.id}/mapping`, {
+        method: "PATCH",
+        body: JSON.stringify({ form_id: formId, project_id: projectId || null }),
+      });
+    } catch (e) {
+      console.error("Failed to update mapping", e);
+    }
+  }
+
+  const unmappedNow = forms.filter((f) => !f.project).length;
 
   return (
     <>
@@ -36,7 +124,7 @@ export default function Sources() {
 
       {unmappedNow > 0 && (
         <div style={{ background: "var(--warm-wash, #f7f1e2)", border: "1px solid #b8912f", borderRadius: 8, padding: "12px 18px", marginBottom: 16, color: "#854f0b", fontWeight: 600, fontSize: 14 }}>
-          {seed.unmapped24h} leads arrived from an unmapped form in the last 24 hours — they received generic responses. Map the form below.
+          {unmapped24h} leads arrived from an unmapped form in the last 24 hours — they received generic responses. Map the form below.
         </div>
       )}
 
@@ -59,11 +147,11 @@ export default function Sources() {
                 <td>
                   {!f.project && <span className="chip chip-hot" style={{ marginRight: 8 }}>Unmapped</span>}
                   <select
-                    value={f.project}
+                    value={f.project_id}
                     onChange={(e) => setMapping(f.id, e.target.value)}
                     style={!f.project ? { borderColor: "#b8912f", borderWidth: 2 } : undefined}>
                     <option value="">Choose project…</option>
-                    {projects.map((p) => <option key={p}>{p}</option>)}
+                    {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </td>
               </tr>
@@ -93,7 +181,7 @@ export default function Sources() {
                 </span>
                 <span style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <span style={{ color: "var(--muted)", fontSize: 13 }}>{g.leads} leads · 30d</span>
-                  <select defaultValue={g.project}>{projects.map((p) => <option key={p}>{p}</option>)}</select>
+                  <select defaultValue={g.project}>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
