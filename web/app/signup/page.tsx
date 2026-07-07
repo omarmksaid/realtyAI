@@ -51,6 +51,16 @@ export default function Signup() {
         return;
       }
 
+      // If signUp didn't auto-set the session, sign in explicitly
+      if (!authData.session) {
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) {
+          setError(signInError.message);
+          setLoading(false);
+          return;
+        }
+      }
+
       // 2. Create the company
       const { data: company, error: companyError } = await supabase
         .from("companies")
