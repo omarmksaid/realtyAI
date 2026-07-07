@@ -70,7 +70,8 @@ async function extractText(doc: any, rawText?: string): Promise<string> {
   return buf.toString("utf-8");
 }
 
-export function registerIngest(boss: PgBoss) {
+export async function registerIngest(boss: PgBoss) {
+  await boss.createQueue("ingest");
   return boss.work("ingest", { batchSize: 1 }, async ([job]) => {
     const { documentId, rawText } = job.data as { documentId: string; rawText?: string };
 

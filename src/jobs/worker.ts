@@ -19,6 +19,7 @@ export async function startWorker() {
   await boss.start();
 
   /* ------- outreach: one job per (lead, channel) ------- */
+  await boss.createQueue("outreach");
   await boss.work("outreach", async ([job]) => {
     const { leadId, channel } = job.data as { leadId: string; channel: string };
 
@@ -64,6 +65,7 @@ export async function startWorker() {
   });
 
   /* ------- morning digest: 8:30am company-local ------- */
+  await boss.createQueue("morning-digest");
   await boss.schedule("morning-digest", "30 8 * * *", {}, { tz: "America/Toronto" });
   await boss.work("morning-digest", async () => {
     const { data: companies } = await supabaseAdmin
@@ -124,6 +126,7 @@ export async function startWorker() {
   await registerIngest(boss);
 
   /* ------- trial lifecycle: daily 9am check -> nudge + expiry emails ------- */
+  await boss.createQueue("trial-check");
   await boss.schedule("trial-check", "0 9 * * *", {}, { tz: "America/Toronto" });
   await boss.work("trial-check", async () => {
     const { Resend } = await import("resend");
