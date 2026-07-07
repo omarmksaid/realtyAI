@@ -42,4 +42,4 @@ app.get("/u/:leadId", async (c) => {
 
 const port = Number(process.env.PORT ?? 3000);
 serve({ fetch: app.fetch, port }, () => console.log(`api listening on :${port}`));
-startWorker().catch((e) => { console.error(e); process.exit(1); });
+startWorker().catch((e) => { console.error("worker failed to start (will retry on next deploy):", e.message); });
