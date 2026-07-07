@@ -30,8 +30,8 @@ export const env = {
   VAPI_PHONE_NUMBER_ID: process.env.VAPI_PHONE_NUMBER_ID ?? "",
   VAPI_WEBHOOK_SECRET: process.env.VAPI_WEBHOOK_SECRET ?? "",
 
-  META_APP_SECRET: req("META_APP_SECRET"),
-  META_VERIFY_TOKEN: req("META_VERIFY_TOKEN"),
+  META_APP_SECRET: process.env.META_APP_SECRET ?? "",
+  META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN ?? "",
 
   BROKERAGE_NAME: process.env.BROKERAGE_NAME ?? "Your Brokerage",
   BROKERAGE_ADDRESS: process.env.BROKERAGE_ADDRESS ?? "Toronto, ON",
