@@ -1,10 +1,10 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
 
-export default function Join() {
+function JoinForm() {
   const [onCall, setOnCall] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,11 +25,9 @@ export default function Join() {
     try {
       const supabase = createClient();
 
-      // Sign up
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
       if (signUpError) { setError(signUpError.message); setLoading(false); return; }
 
-      // If signUp didn't auto-set session, sign in explicitly
       let session = signUpData.session;
       if (!session) {
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
@@ -39,9 +37,9 @@ export default function Join() {
 
       if (!session) { setError("Could not establish a session. Please try signing in."); setLoading(false); return; }
 
-      // Accept the invite via API
       const res = await apiFetch("/team/accept", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, phone: phone || null, on_call: onCall }),
       });
 
@@ -61,8 +59,8 @@ export default function Join() {
 
   return (
     <div style={{ maxWidth: 420, margin: "8vh auto" }}>
-      <h1 className="page-title">Join Northgate Realty</h1>
-      <p className="page-sub">You&apos;ve been invited to the realtyAI workspace.</p>
+      <h1 className="page-title">Join your team</h1>
+      <p className="page-sub">You&apos;ve been invited to a realtyAI workspace.</p>
       <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input type="email" placeholder="Work email" value={email} onChange={(e) => setEmail(e.target.value)} />
         <input type="password" placeholder="Create a password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -82,5 +80,13 @@ export default function Join() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function Join() {
+  return (
+    <Suspense fallback={<div style={{ maxWidth: 420, margin: "8vh auto", color: "var(--muted)" }}>Loading...</div>}>
+      <JoinForm />
+    </Suspense>
   );
 }
