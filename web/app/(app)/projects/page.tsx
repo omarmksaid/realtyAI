@@ -24,6 +24,10 @@ export default function Projects() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [driveFolderUrls, setDriveFolderUrls] = useState<Record<string, string>>({});
   const [linkingSaving, setLinkingSaving] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newCity, setNewCity] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const fetchProjects = useCallback(async () => {
     if (isDemo) return;
@@ -148,6 +152,32 @@ export default function Projects() {
     }
   }
 
+  async function createProject() {
+    if (!newName.trim()) return;
+    if (isDemo) { setShowCreate(false); return; }
+    setCreating(true);
+    try {
+      const supabase = createClient();
+      const companyId = await getCompanyId();
+      if (!companyId) return;
+      const { error } = await supabase.from("projects").insert({
+        company_id: companyId,
+        name: newName.trim(),
+        city: newCity.trim() || null,
+      });
+      if (error) {
+        console.error("Failed to create project:", error);
+      } else {
+        setNewName("");
+        setNewCity("");
+        setShowCreate(false);
+        fetchProjects();
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
   if (loading) return <><h1 className="page-title">Projects</h1><p className="page-sub">Loading…</p></>;
 
   return (
@@ -156,6 +186,30 @@ export default function Projects() {
       <p className="page-sub">
         Each project’s knowledge is what the AI is allowed to say. It never answers from anything else.
       </p>
+
+      {showCreate ? (
+        <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+          <p className="section-label">New project</p>
+          <input placeholder="Project name (e.g. The Riv — Vaughan)" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <input placeholder="City (optional)" value={newCity} onChange={(e) => setNewCity(e.target.value)} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-primary" onClick={createProject} disabled={creating || !newName.trim()}>
+              {creating ? "Creating…" : "Create project"}
+            </button>
+            <button className="btn" onClick={() => setShowCreate(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 16 }}>
+          <button className="btn" onClick={() => setShowCreate(true)}>+ New project</button>
+        </div>
+      )}
+
+      {projects.length === 0 && !loading && (
+        <div className="card card-pad" style={{ color: "var(--muted)" }}>
+          No projects yet. Create one above to start adding knowledge for the AI.
+        </div>
+      )}
 
       {projects.map((p) => (
         <div className="card" key={p.id}>
