@@ -209,42 +209,33 @@ Reply in the lead's language.`;
       <Coverage />
 
       <div className="card card-pad">
-        <p className="section-label">After-hours routing</p>
+        <p className="section-label">After-hours channels</p>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 0 }}>
+          When a lead arrives outside staffed hours (the unpainted cells above), realtyAI reaches out on these channels:
+        </p>
         {rules.length === 0 && !loading && (
-          <p style={{ color: "var(--muted)", fontSize: 14 }}>No routing rules yet. Add one to enable after-hours automation.</p>
+          <div style={{ marginTop: 12 }}>
+            <p style={{ color: "var(--muted)", fontSize: 14, margin: "0 0 12px" }}>No channels configured yet. Add a rule to enable after-hours automation.</p>
+            <button className="btn btn-primary" onClick={() => setShowAddRule(true)}>Set up channels</button>
+          </div>
         )}
         {rules.map((r) => (
           <div className="doc-row" key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>
-              <b>{r.label}</b>
-              <span style={{ color: "var(--muted)", marginLeft: 10 }}>{r.window}</span>
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {r.channels.map((c) => (
-                <span key={c} className="chip chip-lang" style={{ marginLeft: 0 }}>{c}</span>
+                <span key={c} className="chip chip-lang" style={{ marginRight: 6 }}>{c}</span>
               ))}
-              {!isDemo && (
-                <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", marginLeft: 8 }} onClick={() => deleteRule(r.id)}>×</button>
-              )}
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>{r.label}</span>
             </span>
+            {!isDemo && (
+              <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px" }} onClick={() => deleteRule(r.id)}>×</button>
+            )}
           </div>
         ))}
 
         {showAddRule && (
           <div style={{ marginTop: 14, padding: 16, border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 10 }}>
-            <input placeholder="Rule label (e.g. Late night)" value={newLabel} onChange={(e) => setNewLabel(e.target.value)} />
-            <div style={{ display: "flex", gap: 10 }}>
-              <select value={newDayType} onChange={(e) => setNewDayType(e.target.value)} style={{ flex: 1 }}>
-                {DAY_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              <select value={newStart} onChange={(e) => setNewStart(e.target.value)} style={{ flex: 1 }}>
-                {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
-              </select>
-              <span style={{ alignSelf: "center", color: "var(--muted)" }}>to</span>
-              <select value={newEnd} onChange={(e) => setNewEnd(e.target.value)} style={{ flex: 1 }}>
-                {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
-              </select>
-            </div>
+            <input placeholder="Label (e.g. Default after-hours)" value={newLabel} onChange={(e) => setNewLabel(e.target.value)} />
             <div style={{ display: "flex", gap: 8 }}>
               {CHANNEL_OPTIONS.map((ch) => (
                 <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 14, cursor: "pointer" }}>
@@ -254,24 +245,23 @@ Reply in the lead's language.`;
               ))}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <label style={{ fontSize: 13, color: "var(--muted)" }}>Follow-up delay (min):</label>
+              <label style={{ fontSize: 13, color: "var(--muted)" }}>Minutes between each channel:</label>
               <input type="number" value={newDelay} onChange={(e) => setNewDelay(Number(e.target.value))} style={{ width: 70 }} min={0} />
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn btn-primary" onClick={addRule} disabled={saving || !newLabel.trim()}>
-                {saving ? "Saving…" : "Save rule"}
+                {saving ? "Saving…" : "Save"}
               </button>
               <button className="btn" onClick={() => setShowAddRule(false)}>Cancel</button>
             </div>
           </div>
         )}
 
-        <div style={{ marginTop: 14 }}>
-          {!showAddRule && <button className="btn" onClick={() => setShowAddRule(true)}>Add rule</button>}
-        </div>
-        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
-          During staffed hours (see calendar above) nothing is automated — leads go straight to your team.
-        </p>
+        {rules.length > 0 && !showAddRule && (
+          <div style={{ marginTop: 14 }}>
+            <button className="btn" onClick={() => setShowAddRule(true)}>Add rule</button>
+          </div>
+        )}
       </div>
 
       <div className="card card-pad">
