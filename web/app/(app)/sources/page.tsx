@@ -140,12 +140,18 @@ export default function Sources() {
     if (!newFormName.trim()) return;
     setAddingForm(true);
     try {
-      if (!isDemo && live) {
+      if (!isDemo) {
         const res = await apiFetch("/sources", {
           method: "POST",
-          body: JSON.stringify({ provider: "google", label: newFormName, project_id: newFormProject || null }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: newFormName }),
         });
         if (!res.ok) { console.error("Failed to add source"); setAddingForm(false); return; }
+        const result = await res.json();
+        // Show the google_key — user needs to paste it into Google Ads along with the URL
+        if (result.google_key) {
+          alert(`Webhook URL:\n${result.webhook_url}\n\nGoogle Key (paste as "google_key" in the webhook payload):\n${result.google_key}`);
+        }
         await fetchSources();
       } else {
         // Demo mode: add locally
