@@ -86,15 +86,19 @@ export default function Sources() {
       }
       // Map google sources for display
       if (google.length > 0) {
-        setGoogleDisplay(google.map((s) => ({
-          id: s.id,
-          name: s.label,
-          status: s.test_received_at ? "Verified · test received" : "Waiting for test data",
-          leads: s.forms.reduce((acc, f) => acc + f.leads, 0),
-          project: s.forms[0]?.project ?? "",
-          project_id: s.forms[0]?.project_id ?? "",
-          url: s.webhook_url ?? "",
-        })));
+        setGoogleDisplay(google.map((s: any) => {
+          const defaultProjId = s.default_project_id ?? s.forms?.[0]?.project_id ?? "";
+          const defaultProjName = defaultProjId ? ((data.projects ?? []).find((p: any) => p.id === defaultProjId)?.name ?? "") : "";
+          return {
+            id: s.id,
+            name: s.label,
+            status: s.test_received_at ? "Verified · test received" : "Waiting for test data",
+            leads: s.forms.reduce((acc: number, f: any) => acc + f.leads, 0),
+            project: defaultProjName,
+            project_id: defaultProjId,
+            url: s.webhook_url ?? "",
+          };
+        }));
       }
       setLive(true);
     } catch (e) {
@@ -171,7 +175,7 @@ export default function Sources() {
         const res = await apiFetch("/sources", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ label: newFormName }),
+          body: JSON.stringify({ label: newFormName, project_id: newFormProject || null }),
         });
         if (!res.ok) { console.error("Failed to add source"); setAddingForm(false); return; }
         const result = await res.json();

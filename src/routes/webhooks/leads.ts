@@ -91,7 +91,7 @@ leadWebhooks.post("/google", async (c) => {
 
   await handleIncomingLead({
     company_id: source.company_id,
-    project_id: (source.config as any).form_project_map?.[body.form_id] ?? null,
+    project_id: (source.config as any).form_project_map?.[body.form_id] ?? (source.config as any).default_project_id ?? null,
     source_id: source.id,
     provider: "google",
     external_id: body.lead_id,

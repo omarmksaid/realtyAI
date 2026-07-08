@@ -65,9 +65,10 @@ sourcesRoutes.get("/", async (c) => {
       id: src.id, provider: src.provider, label: src.label,
       webhook_url: src.provider === "google" ? `${env.APP_URL}/webhooks/google?src=${src.id}` : null,
       test_received_at: cfg.test_received_at ?? null,
+      default_project_id: cfg.default_project_id ?? null,
       forms: forms.map(f => ({
         ...f,
-        project_id: cfg.form_project_map?.[f.form_id] ?? null,
+        project_id: cfg.form_project_map?.[f.form_id] ?? cfg.default_project_id ?? null,
         leads_30d: stats[f.form_id]?.count ?? 0,
         last_lead_at: stats[f.form_id]?.last ?? null,
       })),
@@ -111,15 +112,18 @@ sourcesRoutes.patch("/:id/mapping", async (c) => {
 /** POST /sources — register a new Google form source; returns its webhook URL + key. */
 sourcesRoutes.post("/", async (c) => {
   const companyId = c.get("companyId");
-  const { label } = await c.req.json();
+  const { label, project_id } = await c.req.json();
   const google_key = randomBytes(18).toString("base64url");
+  // If a project_id is provided, map all leads from this source to that project by default
+  const form_project_map: Record<string, string> = {};
+  if (project_id) form_project_map["_default"] = project_id;
   const { data: src } = await supabaseAdmin.from("lead_sources").insert({
     company_id: companyId, provider: "google", label: label ?? "Google lead form",
-    config: { google_key, form_project_map: {} },
+    config: { google_key, form_project_map, default_project_id: project_id ?? null },
   }).select().single();
   return c.json({
     id: src!.id,
     webhook_url: `${env.APP_URL}/webhooks/google?src=${src!.id}`,
-    google_key, // paste both into the lead form's webhook section
+    google_key,
   });
 });
