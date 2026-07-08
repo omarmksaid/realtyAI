@@ -1,45 +1,43 @@
 import { MiddlewareHandler } from "hono";
-import { jwtVerify } from "jose";
+import { jwtVerify, createRemoteJWKSet } from "jose";
 import { supabaseAdmin } from "./supabase";
 import { env } from "./env";
 
 /**
  * Auth model:
  * 1. Dashboard sends the Supabase session JWT as `Authorization: Bearer <jwt>`.
- * 2. We verify it LOCALLY with the project's JWT secret (no network hop, fast).
+ * 2. We verify it using Supabase's JWKS endpoint (supports both HS256 and ES256).
  * 3. We resolve the user's memberships and pin the request to ONE company:
  *    - `X-Company-Id` header if the user belongs to it (multi-company users),
  *    - otherwise their single membership.
  * 4. Handlers read companyId/userId from context — NEVER from the request body.
- *    This is the line that makes cross-tenant access impossible to express.
  *
  * Webhook routes (/webhooks/*) do NOT use this — they authenticate the
  * provider instead (Meta HMAC, Twilio signature, Google/Vapi shared keys).
  */
 
-// Supabase JWT secret — may be HMAC (HS256) or need to be used as-is.
-// We try HMAC first with the raw secret as bytes, which covers most Supabase setups.
-const rawSecret = env.SUPABASE_JWT_SECRET;
-const hmacSecret = new TextEncoder().encode(rawSecret);
+// JWKS endpoint for ES256 verification (newer Supabase projects)
+const JWKS = createRemoteJWKSet(
+  new URL(`${env.SUPABASE_URL}/auth/v1/keys`)
+);
+
+// Fallback: HMAC secret for HS256 (older Supabase projects)
+const hmacSecret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
 
 async function verifyJwt(token: string): Promise<{ sub: string; email?: string }> {
-  // Try HS256 with the secret as UTF-8 bytes (most common Supabase setup)
+  // Try JWKS (ES256) first
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    return { sub: payload.sub as string, email: (payload as any).email };
+  } catch {}
+
+  // Fallback to HS256 with shared secret
   try {
     const { payload } = await jwtVerify(token, hmacSecret, { audience: "authenticated" });
     return { sub: payload.sub as string, email: (payload as any).email };
   } catch {}
 
-  // Try HS256 with base64-decoded secret
-  try {
-    const b64Secret = Buffer.from(rawSecret, "base64");
-    const key = await crypto.subtle.importKey(
-      "raw", b64Secret, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]
-    );
-    const { payload } = await jwtVerify(token, key, { audience: "authenticated" });
-    return { sub: payload.sub as string, email: (payload as any).email };
-  } catch {}
-
-  // Try without audience check (some Supabase versions use different aud)
+  // Try HS256 without audience check
   try {
     const { payload } = await jwtVerify(token, hmacSecret);
     return { sub: payload.sub as string, email: (payload as any).email };
