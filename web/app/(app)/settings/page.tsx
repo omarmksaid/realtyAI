@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { isDemo } from "@/lib/data";
-import { apiFetch } from "@/lib/api";
+import { isDemo } from "../../lib/data";
+import { apiFetch, getCompanyId } from "../../lib/api";
+import { createClient } from "../../lib/supabase";
 
 const demoVoices = [
   { id: "v1", name: "Hope", labels: "Canadian accent · warm · mid 30s", pick: true },
@@ -23,21 +24,39 @@ interface Invite { email: string; role: string; expires_at: string }
 export default function Settings() {
   const [selected, setSelected] = useState("v1");
   const [voices, setVoices] = useState(demoVoices);
-  const [members, setMembers] = useState<Member[]>(demoMembers);
-  const [pending, setPending] = useState<Invite[]>(demoPending);
+  const [members, setMembers] = useState<Member[]>(isDemo ? demoMembers : []);
+  const [pending, setPending] = useState<Invite[]>(isDemo ? demoPending : []);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const fetchTeam = useCallback(async () => {
     if (isDemo) return;
     try {
-      const res = await apiFetch("/team");
-      if (!res.ok) throw new Error("fetch failed");
-      const data = await res.json();
-      if (data.members?.length) setMembers(data.members);
-      setPending(data.pending ?? []);
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) setCurrentUserId(session.user.id);
+
+      const companyId = await getCompanyId();
+      if (!companyId) return;
+
+      // Fetch members directly from Supabase
+      const { data: membersData } = await supabase
+        .from("memberships")
+        .select("user_id, email, role, phone, on_call")
+        .eq("company_id", companyId);
+
+      if (membersData) {
+        setMembers(membersData.map((m: any) => ({
+          user_id: m.user_id,
+          email: m.email ?? "",
+          role: m.role,
+          phone: m.phone,
+          on_call: m.on_call ?? false,
+        })));
+      }
     } catch (e) {
-      console.error("Failed to fetch team, using demo data", e);
+      console.error("Failed to fetch team", e);
     }
   }, []);
 
@@ -48,13 +67,35 @@ export default function Settings() {
     setMembers((ms) => ms.map((m) => m.user_id === member.user_id ? { ...m, on_call: newVal } : m));
     if (isDemo) return;
     try {
-      await apiFetch(`/team/members/${member.user_id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ on_call: newVal }),
-      });
+      const supabase = createClient();
+      const companyId = await getCompanyId();
+      await supabase.from("memberships")
+        .update({ on_call: newVal })
+        .eq("user_id", member.user_id)
+        .eq("company_id", companyId);
     } catch (e) {
       console.error("Failed to toggle on-call", e);
       setMembers((ms) => ms.map((m) => m.user_id === member.user_id ? { ...m, on_call: !newVal } : m));
+    }
+  }
+
+  async function removeMember(member: Member) {
+    if (member.role === "owner") return;
+    if (!confirm(`Remove ${member.email} from this workspace?`)) return;
+    if (isDemo) {
+      setMembers((ms) => ms.filter((m) => m.user_id !== member.user_id));
+      return;
+    }
+    try {
+      const supabase = createClient();
+      const companyId = await getCompanyId();
+      await supabase.from("memberships")
+        .delete()
+        .eq("user_id", member.user_id)
+        .eq("company_id", companyId);
+      setMembers((ms) => ms.filter((m) => m.user_id !== member.user_id));
+    } catch (e) {
+      console.error("Failed to remove member", e);
     }
   }
 
@@ -65,6 +106,7 @@ export default function Settings() {
       try {
         const res = await apiFetch("/team/invites", {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: inviteEmail.trim() }),
         });
         if (res.ok) {
@@ -107,7 +149,7 @@ export default function Settings() {
               <span style={{ color: "var(--muted)", marginLeft: 10, fontSize: 13 }}>{typeof v.labels === "string" ? v.labels : Object.values(v.labels ?? {}).join(" · ")}</span>
             </span>
             <span style={{ display: "flex", gap: 8 }}>
-              <button className="btn" style={{ padding: "5px 12px", fontSize: 13 }}>Preview</button>
+              <button className="btn" style={{ padding: "5px 12px", fontSize: 13 }} onClick={() => alert("Voice preview requires ElevenLabs setup")}>Preview</button>
               <button
                 className={`btn ${selected === v.id ? "btn-primary" : ""}`}
                 style={{ padding: "5px 12px", fontSize: 13 }}
@@ -124,11 +166,19 @@ export default function Settings() {
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 0 }}>
           On-call members get a text the moment a lead asks for a person.
         </p>
+        {members.length === 0 && !isDemo && (
+          <p style={{ color: "var(--muted)", fontSize: 14 }}>No team members yet.</p>
+        )}
         {members.map((m) => (
-          <div className="doc-row" key={m.user_id}>
+          <div className="doc-row" key={m.user_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span><b>{m.email}</b><span style={{ color: "var(--muted)", marginLeft: 10, fontSize: 13 }}>{m.role.charAt(0).toUpperCase() + m.role.slice(1)} · {formatPhone(m.phone)}</span></span>
-            <span className={`chip ${m.on_call ? "chip-ai" : "chip-lang"}`} style={{ cursor: "pointer" }} onClick={() => toggleOnCall(m)}>
-              {m.on_call ? "On call" : "Off"}
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span className={`chip ${m.on_call ? "chip-ai" : "chip-lang"}`} style={{ cursor: "pointer" }} onClick={() => toggleOnCall(m)}>
+                {m.on_call ? "On call" : "Off"}
+              </span>
+              {m.role !== "owner" && m.user_id !== currentUserId && (
+                <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }} onClick={() => removeMember(m)}>Remove</button>
+              )}
             </span>
           </div>
         ))}
@@ -139,16 +189,9 @@ export default function Settings() {
           </div>
         ))}
         <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-          <input placeholder="teammate@company.ca" style={{ flex: 1 }} value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendInvite()} />
+          <input placeholder="teammate@company.com" style={{ flex: 1 }} value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendInvite()} />
           <button className="btn btn-primary" disabled={inviting} onClick={sendInvite}>{inviting ? "Sending…" : "Send invite"}</button>
         </div>
-      </div>
-
-      <div className="card card-pad">
-        <p className="section-label">WhatsApp sender</p>
-        <div className="doc-row"><span>Number</span><span>+1 (416) 555-0138</span></div>
-        <div className="doc-row"><span>Display name</span><span>Northgate Realty</span></div>
-        <div className="doc-row"><span>Quality rating</span><span className="chip chip-ai">High</span></div>
       </div>
     </>
   );

@@ -23,9 +23,9 @@ function mapRow(r: any): LeadRow {
     : "";
   return {
     id: r.id,
-    name: r.name || "Unknown",
+    name: r.full_name || r.name || "Unknown",
     project: r.projects?.name || "",
-    source: r.source === "google" ? "google" : "meta",
+    source: r.provider === "google" ? "google" : "meta",
     status: r.status || "new",
     channel: r.channel || "whatsapp",
     language: lang,
@@ -46,7 +46,7 @@ export default function Leads() {
     (async () => {
       try {
         const companyId = await getCompanyId();
-        if (!companyId) { setLeads(demoLeads); setLoading(false); return; }
+        if (!companyId) { setLoading(false); return; }
         const supabase = createClient();
         const { data, error } = await supabase
           .from("leads")
@@ -54,10 +54,10 @@ export default function Leads() {
           .eq("company_id", companyId)
           .order("created_at", { ascending: false })
           .limit(50);
-        if (error || !data) { setLeads(demoLeads); setLoading(false); return; }
+        if (error || !data) { setLoading(false); return; }
         if (!cancelled) setLeads(data.map(mapRow));
       } catch {
-        if (!cancelled) setLeads(demoLeads);
+        // Keep empty state on error
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -72,6 +72,8 @@ export default function Leads() {
       <div className="card">
         {loading ? (
           <p style={{ padding: "24px 22px", color: "var(--muted)" }}>Loading leads...</p>
+        ) : leads.length === 0 ? (
+          <p style={{ padding: "24px 22px", color: "var(--muted)" }}>No leads yet. They&apos;ll appear here as they come in from your ad campaigns.</p>
         ) : (
         <table>
           <thead>

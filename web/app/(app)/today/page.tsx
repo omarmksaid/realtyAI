@@ -20,40 +20,46 @@ function Md({ text }: { text: string }) {
 }
 
 export default function Today() {
-  const [stats, setStats] = useState(demoStats);
-  const [digest, setDigest] = useState(demoDigest);
-  const [hot, setHot] = useState<LeadRow[]>(demoLeads.filter((l) => l.score === "hot"));
-  const [spend, setSpend] = useState("$247");
-  const [spendPerLead, setSpendPerLead] = useState("~$0.41/lead");
+  const emptyStats = { newLeads: 0, engaged: 0, engagementRate: "0%", handoffs: 0 };
+  const emptyDigest = { date: new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }), body: ["No overnight briefing yet. Briefings are generated at 8:30 AM after your first leads arrive."] };
+
+  const [stats, setStats] = useState(isDemo ? demoStats : emptyStats);
+  const [digest, setDigest] = useState(isDemo ? demoDigest : emptyDigest);
+  const [hot, setHot] = useState<LeadRow[]>(isDemo ? demoLeads.filter((l) => l.score === "hot") : []);
+  const [spend, setSpend] = useState(isDemo ? "$247" : "$0");
+  const [spendPerLead, setSpendPerLead] = useState(isDemo ? "~$0.41/lead" : "");
 
   useEffect(() => {
     if (isDemo) return;
 
     async function load() {
       try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
         // Fetch company stats from API
         const companyRes = await apiFetch("/agent/company");
         if (companyRes.ok) {
           const company = await companyRes.json();
           if (company.stats) {
             setStats({
-              newLeads: company.stats.new_leads ?? demoStats.newLeads,
-              engaged: company.stats.engaged ?? demoStats.engaged,
-              engagementRate: company.stats.engagement_rate ?? demoStats.engagementRate,
-              handoffs: company.stats.handoffs ?? demoStats.handoffs,
+              newLeads: company.stats.new_leads ?? 0,
+              engaged: company.stats.engaged ?? 0,
+              engagementRate: company.stats.engagement_rate ?? "0%",
+              handoffs: company.stats.handoffs ?? 0,
             });
           }
           if (company.spend != null) {
             setSpend(`$${company.spend}`);
             const perLead = company.stats?.new_leads
               ? `~$${(company.spend / company.stats.new_leads).toFixed(2)}/lead`
-              : spendPerLead;
+              : "";
             setSpendPerLead(perLead);
           }
         }
 
         // Fetch today’s digest from Supabase
-        const supabase = createClient();
         const today = new Date().toISOString().slice(0, 10);
         const { data: digestRow } = await supabase
           .from("daily_summaries")
@@ -63,8 +69,8 @@ export default function Today() {
 
         if (digestRow) {
           setDigest({
-            date: digestRow.date_label ?? demoDigest.date,
-            body: digestRow.body ?? demoDigest.body,
+            date: digestRow.date_label ?? digest.date,
+            body: Array.isArray(digestRow.content) ? digestRow.content : [digestRow.content ?? ""],
           });
         }
 
@@ -76,25 +82,25 @@ export default function Today() {
           .order("created_at", { ascending: false })
           .limit(10);
 
-        if (hotLeads && hotLeads.length > 0) {
+        if (hotLeads) {
           setHot(
             hotLeads.map((l: any) => ({
               id: l.id,
-              name: l.name,
+              name: l.full_name ?? l.name ?? "Unknown",
               project: l.projects?.name ?? "",
-              source: l.source,
+              source: l.provider ?? l.source ?? "unknown",
               status: l.status,
-              channel: l.channel,
+              channel: "",
               language: l.detected_language ?? "en",
               langLabel: l.detected_language ?? "English",
-              score: l.score as "hot",
+              score: (l.score ?? "warm") as "hot",
               scoreReason: l.score_reason ?? "",
               receivedAt: new Date(l.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
             }))
           );
         }
       } catch {
-        // Keep demo data on failure
+        // Keep current state on failure
       }
     }
     load();

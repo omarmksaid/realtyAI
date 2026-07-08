@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { demoProjects, isDemo } from "@/lib/data";
 import { createClient } from "@/lib/supabase";
 import { apiFetch, getCompanyId } from "@/lib/api";
@@ -20,6 +20,10 @@ export default function Projects() {
   const [tab, setTab] = useState<"drive" | "text" | "upload">("drive");
   const [pasteText, setPasteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [driveFolderUrls, setDriveFolderUrls] = useState<Record<string, string>>({});
+  const [linkingSaving, setLinkingSaving] = useState(false);
 
   const fetchProjects = useCallback(async () => {
     if (isDemo) return;
@@ -95,6 +99,55 @@ export default function Projects() {
     }
   }
 
+  async function handleFileUpload(projectId: string, files: FileList | null) {
+    if (!files || files.length === 0) return;
+    if (isDemo) { alert("File upload requires Supabase connection"); return; }
+    setUploading(true);
+    try {
+      const supabase = createClient();
+      const companyId = await getCompanyId();
+      if (!companyId) throw new Error("No company");
+
+      for (const file of Array.from(files)) {
+        const path = `${companyId}/${projectId}/${Date.now()}-${file.name}`;
+        const { error: uploadErr } = await supabase.storage.from("knowledge").upload(path, file);
+        if (uploadErr) { console.error("Upload error", uploadErr); continue; }
+
+        // Trigger ingestion by creating a document record via API
+        await apiFetch(`/agent/projects/${projectId}/knowledge/upload`, {
+          method: "POST",
+          body: JSON.stringify({ name: file.name, storage_path: path }),
+        });
+      }
+      fetchProjects();
+    } catch (e) {
+      console.error("Failed to upload files", e);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function saveDriveFolder(projectId: string) {
+    const url = driveFolderUrls[projectId]?.trim();
+    if (!url) { alert("Please enter a Google Drive folder URL"); return; }
+    if (isDemo) { alert("Drive sync requires backend setup"); return; }
+    setLinkingSaving(true);
+    try {
+      await apiFetch(`/agent/projects/${projectId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ drive_folder_url: url }),
+      });
+      // Update local state to show "Re-sync" next time
+      setProjects((ps) => ps.map((p) => p.id === projectId ? { ...p, driveLinked: true } : p));
+      alert("Drive folder saved. Sync will run overnight once the handler is configured.");
+    } catch (e) {
+      console.error("Failed to save drive folder", e);
+    } finally {
+      setLinkingSaving(false);
+    }
+  }
+
   if (loading) return <><h1 className="page-title">Projects</h1><p className="page-sub">Loading…</p></>;
 
   return (
@@ -148,8 +201,8 @@ export default function Projects() {
 
               {tab === "drive" && (
                 <div style={{ display: "flex", gap: 10 }}>
-                  <input style={{ flex: 1 }} placeholder="https://drive.google.com/drive/folders/…" defaultValue={p.driveLinked ? "https://drive.google.com/drive/folders/1xK…riv-sales" : ""} />
-                  <button className="btn btn-primary">{p.driveLinked ? "Re-sync" : "Link folder"}</button>
+                  <input style={{ flex: 1 }} placeholder="https://drive.google.com/drive/folders/…" value={driveFolderUrls[p.id] ?? (p.driveLinked ? "https://drive.google.com/drive/folders/1xK…riv-sales" : "")} onChange={(e) => setDriveFolderUrls((prev) => ({ ...prev, [p.id]: e.target.value }))} />
+                  <button className="btn btn-primary" disabled={linkingSaving} onClick={() => saveDriveFolder(p.id)}>{p.driveLinked ? "Re-sync" : "Link folder"}</button>
                 </div>
               )}
               {tab === "drive" && (
@@ -167,8 +220,9 @@ export default function Projects() {
 
               {tab === "upload" && (
                 <div style={{ border: "1.5px dashed var(--line)", borderRadius: 8, padding: "34px 20px", textAlign: "center", color: "var(--muted)" }}>
-                  Drop floor plans, price lists, or renderings here — PDF, DOCX, PNG, JPG
-                  <div style={{ marginTop: 12 }}><button className="btn">Choose files</button></div>
+                  {uploading ? "Uploading…" : "Drop floor plans, price lists, or renderings here — PDF, DOCX, PNG, JPG"}
+                  <input type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" ref={fileInputRef} style={{ display: "none" }} onChange={(e) => handleFileUpload(p.id, e.target.files)} />
+                  <div style={{ marginTop: 12 }}><button className="btn" disabled={uploading} onClick={() => fileInputRef.current?.click()}>Choose files</button></div>
                 </div>
               )}
             </div>
