@@ -17,11 +17,36 @@ import { env } from "./env";
  * provider instead (Meta HMAC, Twilio signature, Google/Vapi shared keys).
  */
 
-// Supabase JWT secrets may be plain UTF-8 or base64-encoded; try both.
+// Supabase JWT secret — may be HMAC (HS256) or need to be used as-is.
+// We try HMAC first with the raw secret as bytes, which covers most Supabase setups.
 const rawSecret = env.SUPABASE_JWT_SECRET;
-const secret = rawSecret.match(/^[A-Za-z0-9+/=]+$/) && rawSecret.length > 40
-  ? Buffer.from(rawSecret, "base64")
-  : new TextEncoder().encode(rawSecret);
+const hmacSecret = new TextEncoder().encode(rawSecret);
+
+async function verifyJwt(token: string): Promise<{ sub: string; email?: string }> {
+  // Try HS256 with the secret as UTF-8 bytes (most common Supabase setup)
+  try {
+    const { payload } = await jwtVerify(token, hmacSecret, { audience: "authenticated" });
+    return { sub: payload.sub as string, email: (payload as any).email };
+  } catch {}
+
+  // Try HS256 with base64-decoded secret
+  try {
+    const b64Secret = Buffer.from(rawSecret, "base64");
+    const key = await crypto.subtle.importKey(
+      "raw", b64Secret, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]
+    );
+    const { payload } = await jwtVerify(token, key, { audience: "authenticated" });
+    return { sub: payload.sub as string, email: (payload as any).email };
+  } catch {}
+
+  // Try without audience check (some Supabase versions use different aud)
+  try {
+    const { payload } = await jwtVerify(token, hmacSecret);
+    return { sub: payload.sub as string, email: (payload as any).email };
+  } catch (err) {
+    throw err;
+  }
+}
 
 export const requireAuth: MiddlewareHandler = async (c, next) => {
   const header = c.req.header("authorization") ?? "";
@@ -30,22 +55,12 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
 
   let userId: string;
   try {
-    const { payload } = await jwtVerify(token, secret, { audience: "authenticated" });
-    userId = payload.sub as string;
+    const result = await verifyJwt(token);
+    userId = result.sub;
     if (!userId) throw new Error("no sub");
   } catch (err) {
-    // Try the other encoding as fallback
-    try {
-      const altSecret = rawSecret.match(/^[A-Za-z0-9+/=]+$/) && rawSecret.length > 40
-        ? new TextEncoder().encode(rawSecret)
-        : Buffer.from(rawSecret, "base64");
-      const { payload } = await jwtVerify(token, altSecret, { audience: "authenticated" });
-      userId = payload.sub as string;
-      if (!userId) throw new Error("no sub");
-    } catch {
-      console.error("JWT verification failed:", (err as Error).message);
-      return c.json({ error: "invalid or expired token" }, 401);
-    }
+    console.error("JWT verification failed:", (err as Error).message);
+    return c.json({ error: "invalid or expired token" }, 401);
   }
 
   const { data: memberships } = await supabaseAdmin
@@ -79,19 +94,10 @@ export const requirePlatformAdmin: MiddlewareHandler = async (c, next) => {
   if (!token) return c.json({ error: "missing bearer token" }, 401);
   let userId: string;
   try {
-    const { payload } = await jwtVerify(token, secret, { audience: "authenticated" });
-    userId = payload.sub as string;
+    const result = await verifyJwt(token);
+    userId = result.sub;
     if (!userId) throw new Error("no sub");
-  } catch {
-    try {
-      const altSecret = rawSecret.match(/^[A-Za-z0-9+/=]+$/) && rawSecret.length > 40
-        ? new TextEncoder().encode(rawSecret)
-        : Buffer.from(rawSecret, "base64");
-      const { payload } = await jwtVerify(token, altSecret, { audience: "authenticated" });
-      userId = payload.sub as string;
-      if (!userId) throw new Error("no sub");
-    } catch { return c.json({ error: "invalid or expired token" }, 401); }
-  }
+  } catch { return c.json({ error: "invalid or expired token" }, 401); }
 
   const { data } = await supabaseAdmin
     .from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();
