@@ -55,6 +55,14 @@ const tools: Anthropic.Tool[] = [
       required: ["group_by"],
     },
   },
+  {
+    name: "list_projects",
+    description: "List all active projects for this company with their names, cities, and document counts.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
 
 function dayRangeUtc(tz: string, from?: string, to?: string) {
@@ -108,6 +116,16 @@ async function execTool(companyId: string, tz: string, name: string, input: any)
         at: DateTime.fromISO(m.created_at).setZone(tz).toFormat("MMM d, h:mm a"),
       })),
     });
+  }
+
+  if (name === "list_projects") {
+    const { data } = await supabaseAdmin
+      .from("projects")
+      .select("id, name, city, status")
+      .eq("company_id", companyId)
+      .neq("status", "archived")
+      .order("name");
+    return JSON.stringify({ projects: (data ?? []).map((p: any) => ({ id: p.id, name: p.name, city: p.city, status: p.status })) });
   }
 
   if (name === "count_leads") {
