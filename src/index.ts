@@ -31,6 +31,24 @@ app.route("/sources", sourcesRoutes); // form -> project mapping
 app.use("/assistant/*", requireAuth);
 app.route("/assistant", assistantRoutes); // data-assistant chat + voice settings         // takeover, hand-back, agent messages, knowledge ingestion
 
+// Test lead injection (no provider auth — for dev/demo only)
+import { handleIncomingLead } from "./core/router";
+app.post("/webhooks/test", async (c) => {
+  const body = await c.req.json();
+  const result = await handleIncomingLead({
+    company_id: body.company_id,
+    project_id: body.project_id ?? null,
+    source_id: null,
+    provider: "test",
+    external_id: `test-${Date.now()}`,
+    full_name: body.full_name ?? "Test Lead",
+    phone: body.phone,
+    email: body.email,
+    form_data: body.form_data ?? {},
+  });
+  return c.json(result);
+});
+
 // Unsubscribe endpoint (CASL): GET /u/:leadId
 import { supabaseAdmin } from "./lib/supabase";
 app.get("/u/:leadId", async (c) => {
