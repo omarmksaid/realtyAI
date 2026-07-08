@@ -17,7 +17,11 @@ import { env } from "./env";
  * provider instead (Meta HMAC, Twilio signature, Google/Vapi shared keys).
  */
 
-const secret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
+// Supabase JWT secrets may be plain UTF-8 or base64-encoded; try both.
+const rawSecret = env.SUPABASE_JWT_SECRET;
+const secret = rawSecret.match(/^[A-Za-z0-9+/=]+$/) && rawSecret.length > 40
+  ? Buffer.from(rawSecret, "base64")
+  : new TextEncoder().encode(rawSecret);
 
 export const requireAuth: MiddlewareHandler = async (c, next) => {
   const header = c.req.header("authorization") ?? "";
@@ -29,8 +33,19 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
     const { payload } = await jwtVerify(token, secret, { audience: "authenticated" });
     userId = payload.sub as string;
     if (!userId) throw new Error("no sub");
-  } catch {
-    return c.json({ error: "invalid or expired token" }, 401);
+  } catch (err) {
+    // Try the other encoding as fallback
+    try {
+      const altSecret = rawSecret.match(/^[A-Za-z0-9+/=]+$/) && rawSecret.length > 40
+        ? new TextEncoder().encode(rawSecret)
+        : Buffer.from(rawSecret, "base64");
+      const { payload } = await jwtVerify(token, altSecret, { audience: "authenticated" });
+      userId = payload.sub as string;
+      if (!userId) throw new Error("no sub");
+    } catch {
+      console.error("JWT verification failed:", (err as Error).message);
+      return c.json({ error: "invalid or expired token" }, 401);
+    }
   }
 
   const { data: memberships } = await supabaseAdmin
@@ -67,7 +82,16 @@ export const requirePlatformAdmin: MiddlewareHandler = async (c, next) => {
     const { payload } = await jwtVerify(token, secret, { audience: "authenticated" });
     userId = payload.sub as string;
     if (!userId) throw new Error("no sub");
-  } catch { return c.json({ error: "invalid or expired token" }, 401); }
+  } catch {
+    try {
+      const altSecret = rawSecret.match(/^[A-Za-z0-9+/=]+$/) && rawSecret.length > 40
+        ? new TextEncoder().encode(rawSecret)
+        : Buffer.from(rawSecret, "base64");
+      const { payload } = await jwtVerify(token, altSecret, { audience: "authenticated" });
+      userId = payload.sub as string;
+      if (!userId) throw new Error("no sub");
+    } catch { return c.json({ error: "invalid or expired token" }, 401); }
+  }
 
   const { data } = await supabaseAdmin
     .from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle();

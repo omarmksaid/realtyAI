@@ -57,7 +57,10 @@ teamRoutes.patch("/members/:userId", async (c) => {
 });
 
 /* ============ Public accept (JWT-verified, but no membership yet — that's the point) ============ */
-const secret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
+const rawTeamSecret = env.SUPABASE_JWT_SECRET;
+const teamSecret = rawTeamSecret.match(/^[A-Za-z0-9+/=]+$/) && rawTeamSecret.length > 40
+  ? Buffer.from(rawTeamSecret, "base64")
+  : new TextEncoder().encode(rawTeamSecret);
 
 export async function acceptInvite(c: any) {
   const header = c.req.header("authorization") ?? "";
@@ -65,9 +68,17 @@ export async function acceptInvite(c: any) {
   if (!jwt) return c.json({ error: "sign up first, then accept with your session token" }, 401);
   let userId: string, userEmail: string;
   try {
-    const { payload } = await jwtVerify(jwt, secret, { audience: "authenticated" });
+    const { payload } = await jwtVerify(jwt, teamSecret, { audience: "authenticated" });
     userId = payload.sub as string; userEmail = (payload as any).email ?? "";
-  } catch { return c.json({ error: "invalid token" }, 401); }
+  } catch {
+    try {
+      const altSecret = rawTeamSecret.match(/^[A-Za-z0-9+/=]+$/) && rawTeamSecret.length > 40
+        ? new TextEncoder().encode(rawTeamSecret)
+        : Buffer.from(rawTeamSecret, "base64");
+      const { payload } = await jwtVerify(jwt, altSecret, { audience: "authenticated" });
+      userId = payload.sub as string; userEmail = (payload as any).email ?? "";
+    } catch { return c.json({ error: "invalid token" }, 401); }
+  }
 
   const { token, phone, on_call } = await c.req.json();
   const { data: invite } = await supabaseAdmin
