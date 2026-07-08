@@ -29,6 +29,7 @@ const seed = {
 
 interface FormRow { id: string; name: string; leads: number; last: string; project: string; project_id: string }
 interface SourceRow { id: string; provider: string; label: string; webhook_url: string | null; test_received_at: string | null; forms: FormRow[] }
+interface GoogleSourceDisplay { id: string; name: string; status: string; leads: number; project: string; project_id: string; url: string }
 interface ProjectOption { id: string; name: string }
 
 export default function Sources() {
@@ -37,8 +38,16 @@ export default function Sources() {
   const [projects, setProjectsList] = useState<ProjectOption[]>(demoProjects);
   const [unmapped24h, setUnmapped24h] = useState(seed.unmapped24h);
   const [forms, setForms] = useState(seed.meta.forms);
+  const [googleDisplay, setGoogleDisplay] = useState<GoogleSourceDisplay[]>(
+    seed.google.map(g => ({ ...g, project_id: "" }))
+  );
   const [loading, setLoading] = useState(!isDemo);
   const [live, setLive] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newFormName, setNewFormName] = useState("");
+  const [newFormProject, setNewFormProject] = useState("");
+  const [addingForm, setAddingForm] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   const fetchSources = useCallback(async () => {
     if (isDemo) return;
@@ -74,6 +83,18 @@ export default function Sources() {
       // Flatten meta forms for the table
       if (meta.length > 0) {
         setForms(meta.flatMap((s) => s.forms));
+      }
+      // Map google sources for display
+      if (google.length > 0) {
+        setGoogleDisplay(google.map((s) => ({
+          id: s.id,
+          name: s.label,
+          status: s.test_received_at ? "Verified · test received" : "Waiting for test data",
+          leads: s.forms.reduce((acc, f) => acc + f.leads, 0),
+          project: s.forms[0]?.project ?? "",
+          project_id: s.forms[0]?.project_id ?? "",
+          url: s.webhook_url ?? "",
+        })));
       }
       setLive(true);
     } catch (e) {
@@ -112,6 +133,62 @@ export default function Sources() {
       });
     } catch (e) {
       console.error("Failed to update mapping", e);
+    }
+  }
+
+  async function handleAddGoogleForm() {
+    if (!newFormName.trim()) return;
+    setAddingForm(true);
+    try {
+      if (!isDemo && live) {
+        const res = await apiFetch("/sources", {
+          method: "POST",
+          body: JSON.stringify({ provider: "google", label: newFormName, project_id: newFormProject || null }),
+        });
+        if (!res.ok) { console.error("Failed to add source"); setAddingForm(false); return; }
+        await fetchSources();
+      } else {
+        // Demo mode: add locally
+        const newId = `g${Date.now()}`;
+        const url = `https://api.realtyai.app/webhooks/google?src=${newId.slice(0, 4)}...`;
+        setGoogleDisplay((prev) => [...prev, {
+          id: newId, name: newFormName, status: "Waiting for test data",
+          leads: 0, project: projects.find(p => p.id === newFormProject)?.name ?? "", project_id: newFormProject, url,
+        }]);
+      }
+      setNewFormName("");
+      setNewFormProject("");
+      setShowAddForm(false);
+    } catch (e) {
+      console.error("Failed to add Google form", e);
+    } finally {
+      setAddingForm(false);
+    }
+  }
+
+  async function handleCopy(url: string, id: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(id);
+      setTimeout(() => setCopied(null), 2000);
+    } catch (e) {
+      console.error("Failed to copy", e);
+    }
+  }
+
+  async function handleGoogleProjectChange(sourceId: string, projectId: string) {
+    const projectName = projects.find((p) => p.id === projectId)?.name ?? "";
+    setGoogleDisplay((prev) => prev.map(g => g.id === sourceId ? { ...g, project: projectName, project_id: projectId } : g));
+
+    if (isDemo || !live) return;
+
+    try {
+      await apiFetch(`/sources/${sourceId}/mapping`, {
+        method: "PATCH",
+        body: JSON.stringify({ project_id: projectId || null }),
+      });
+    } catch (e) {
+      console.error("Failed to update Google source mapping", e);
     }
   }
 
@@ -169,10 +246,29 @@ export default function Sources() {
             <b style={{ fontSize: 16 }}>Google Ads lead forms</b>
             <div style={{ color: "var(--muted)", fontSize: 13 }}>Each form posts to its own webhook URL — paste it into the form&apos;s webhook field.</div>
           </div>
-          <button className="btn" style={{ fontSize: 13 }}>Add form</button>
+          <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowAddForm(true)}>Add form</button>
         </div>
+        {showAddForm && (
+          <div className="card-pad" style={{ paddingTop: 0, paddingBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              placeholder="Form name, e.g. Brand Search"
+              value={newFormName}
+              onChange={(e) => setNewFormName(e.target.value)}
+              style={{ flex: 1, minWidth: 180 }}
+            />
+            <select value={newFormProject} onChange={(e) => setNewFormProject(e.target.value)}>
+              <option value="">Project (optional)</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={handleAddGoogleForm} disabled={addingForm}>
+              {addingForm ? "Adding…" : "Create"}
+            </button>
+            <button className="btn" style={{ fontSize: 13 }} onClick={() => { setShowAddForm(false); setNewFormName(""); setNewFormProject(""); }}>Cancel</button>
+          </div>
+        )}
         <div className="card-pad" style={{ paddingTop: 0 }}>
-          {seed.google.map((g) => (
+          {googleDisplay.map((g) => (
             <div key={g.id} style={{ borderTop: "1px solid var(--line)", padding: "14px 0" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <span>
@@ -181,12 +277,17 @@ export default function Sources() {
                 </span>
                 <span style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <span style={{ color: "var(--muted)", fontSize: 13 }}>{g.leads} leads · 30d</span>
-                  <select defaultValue={g.project}>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                  <select value={g.project_id} onChange={(e) => handleGoogleProjectChange(g.id, e.target.value)}>
+                    <option value="">Choose project…</option>
+                    {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <code style={{ flex: 1, fontSize: 12, background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: "8px 10px", color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.url}</code>
-                <button className="btn" style={{ fontSize: 13 }}>Copy</button>
+                <button className="btn" style={{ fontSize: 13 }} onClick={() => handleCopy(g.url, g.id)}>
+                  {copied === g.id ? "Copied!" : "Copy"}
+                </button>
               </div>
             </div>
           ))}
