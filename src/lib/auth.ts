@@ -18,7 +18,7 @@ import { env } from "./env";
 
 // JWKS endpoint for ES256 verification (newer Supabase projects)
 const JWKS = createRemoteJWKSet(
-  new URL(`${env.SUPABASE_URL}/auth/v1/keys`)
+  new URL(`${env.SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
 );
 
 // Fallback: HMAC secret for HS256 (older Supabase projects)
