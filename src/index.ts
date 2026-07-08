@@ -1,10 +1,17 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { leadWebhooks } from "./routes/webhooks/leads";
 import { inboundWebhooks } from "./routes/webhooks/inbound";
 import { startWorker } from "./jobs/worker";
 
 const app = new Hono();
+app.use("/*", cors({
+  origin: (origin) => origin ?? "*",
+  allowHeaders: ["Content-Type", "Authorization", "X-Company-Id"],
+  allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  credentials: true,
+}));
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/webhooks", leadWebhooks);     // /webhooks/meta, /webhooks/google
 app.route("/webhooks", inboundWebhooks);  // /webhooks/twilio/whatsapp, /webhooks/vapi
