@@ -32,7 +32,7 @@ function Snippet({ text }: { text: string }) {
 
 export default function Conversations() {
   const [q, setQ] = useState("deposit");
-  const [results, setResults] = useState<SearchResult[]>(demoResults);
+  const [results, setResults] = useState<SearchResult[]>(isDemo ? demoResults : []);
   const [searching, setSearching] = useState(false);
 
   async function doSearch() {

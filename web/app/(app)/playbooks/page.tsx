@@ -45,7 +45,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => {
 });
 
 export default function Playbooks() {
-  const [rules, setRules] = useState<Rule[]>(demoRules);
+  const [rules, setRules] = useState<Rule[]>(isDemo ? demoRules : []);
   const [rawRules, setRawRules] = useState<RuleRaw[]>([]);
   const [template, setTemplate] = useState<PromptTemplate | null>(null);
   const [templateContent, setTemplateContent] = useState("");

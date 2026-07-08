@@ -53,9 +53,9 @@ export default function Conversation() {
   const params = useParams();
   const id = params?.id as string;
 
-  const [lead, setLead] = useState<LeadRow>(demoConversation.lead);
-  const [mode, setMode] = useState<"ai" | "human">(demoConversation.status);
-  const [turns, setTurns] = useState<Turn[]>(demoConversation.turns);
+  const [lead, setLead] = useState<LeadRow>(isDemo ? demoConversation.lead : { id: "", name: "", project: "", source: "meta", status: "new", channel: "whatsapp", language: "en", langLabel: "English", score: "cold", scoreReason: "", receivedAt: "" });
+  const [mode, setMode] = useState<"ai" | "human">(isDemo ? demoConversation.status : "ai");
+  const [turns, setTurns] = useState<Turn[]>(isDemo ? demoConversation.turns : []);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(!isDemo);
 

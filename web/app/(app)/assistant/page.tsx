@@ -21,7 +21,7 @@ const seed: Msg[] = [
 ];
 
 export default function Assistant() {
-  const [msgs, setMsgs] = useState<Msg[]>(seed);
+  const [msgs, setMsgs] = useState<Msg[]>(isDemo ? seed : []);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const threadId = useRef<string | null>(null);

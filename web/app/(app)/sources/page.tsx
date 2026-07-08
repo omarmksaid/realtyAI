@@ -35,11 +35,11 @@ interface ProjectOption { id: string; name: string }
 export default function Sources() {
   const [metaSources, setMetaSources] = useState<SourceRow[]>([]);
   const [googleSources, setGoogleSources] = useState<SourceRow[]>([]);
-  const [projects, setProjectsList] = useState<ProjectOption[]>(demoProjects);
-  const [unmapped24h, setUnmapped24h] = useState(seed.unmapped24h);
-  const [forms, setForms] = useState(seed.meta.forms);
+  const [projects, setProjectsList] = useState<ProjectOption[]>(isDemo ? demoProjects : []);
+  const [unmapped24h, setUnmapped24h] = useState(isDemo ? seed.unmapped24h : 0);
+  const [forms, setForms] = useState(isDemo ? seed.meta.forms : []);
   const [googleDisplay, setGoogleDisplay] = useState<GoogleSourceDisplay[]>(
-    seed.google.map(g => ({ ...g, project_id: "" }))
+    isDemo ? seed.google.map(g => ({ ...g, project_id: "" })) : []
   );
   const [loading, setLoading] = useState(!isDemo);
   const [live, setLive] = useState(false);

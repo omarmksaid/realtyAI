@@ -14,9 +14,9 @@ const statusColor: Record<string, string> = { ready: "chip-ai", processing: "chi
 const sourceIcon: Record<string, string> = { drive: "Drive", text: "Text", upload: "Upload" };
 
 export default function Projects() {
-  const [projects, setProjects] = useState<Project[]>(demoProjects);
+  const [projects, setProjects] = useState<Project[]>(isDemo ? demoProjects : []);
   const [loading, setLoading] = useState(!isDemo);
-  const [open, setOpen] = useState<string | null>(demoProjects[0]?.id ?? null);
+  const [open, setOpen] = useState<string | null>(isDemo ? (demoProjects[0]?.id ?? null) : null);
   const [tab, setTab] = useState<"drive" | "text" | "upload">("drive");
   const [pasteText, setPasteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -38,7 +38,7 @@ export default function Projects() {
         .eq("company_id", companyId)
         .neq("status", "archived");
 
-      if (!rows?.length) return;
+      if (!rows?.length) { setProjects([]); setLoading(false); return; }
 
       // Fetch documents for all projects
       const { data: docs } = await supabase
