@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { demoRules, isDemo } from "../../../lib/data";
-import { createClient } from "../../../lib/supabase";
-import { apiFetch, getCompanyId } from "../../../lib/api";
+import { demoRules, isDemo } from "@/lib/data";
+import { createClient } from "@/lib/supabase";
+import { apiFetch, getCompanyId } from "@/lib/api";
 import Coverage from "./coverage";
 
 interface Rule { id: string; label: string; window: string; channels: string[]; active: boolean }

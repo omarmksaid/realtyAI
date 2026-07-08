@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { createClient } from "../../lib/supabase";
-import { getCompanyId } from "../../lib/api";
-import { isDemo } from "../../lib/data";
+import { createClient } from "@/lib/supabase";
+import { getCompanyId } from "@/lib/api";
+import { isDemo } from "@/lib/data";
 
 interface SearchResult {
   id: string; lead: string; project: string; channel: string; role: string;

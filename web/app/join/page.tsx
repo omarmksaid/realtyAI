@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { createClient } from "../../lib/supabase";
-import { apiFetch } from "../../lib/api";
+import { createClient } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api";
 
 export default function Join() {
   const [onCall, setOnCall] = useState(true);

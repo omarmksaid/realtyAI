@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { createClient } from "../../lib/supabase";
-import { getCompanyId } from "../../lib/api";
-import { isDemo, demoLeads, type LeadRow, type Score } from "../../lib/data";
+import { createClient } from "@/lib/supabase";
+import { getCompanyId } from "@/lib/api";
+import { isDemo, demoLeads, type LeadRow, type Score } from "@/lib/data";
 
 const scoreChip = { hot: "chip-hot", warm: "chip-warm", cold: "chip-cold" } as const;
 const scoreWord = { hot: "Hot", warm: "Warm", cold: "Cold" } as const;

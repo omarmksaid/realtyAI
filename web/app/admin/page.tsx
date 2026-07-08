@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { apiFetch } from "../../lib/api";
-import { isDemo } from "../../lib/data";
+import { apiFetch } from "@/lib/api";
+import { isDemo } from "@/lib/data";
 
 const planChip: Record<string, string> = { trial: "chip-warm", pilot: "chip-ai", standard: "chip-ai", custom: "chip-lang" };
 const statusChip: Record<string, string> = { trial: "chip-warm", active: "chip-ai", past_due: "chip-hot", cancelled: "chip-lang" };

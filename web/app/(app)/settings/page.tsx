@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { isDemo } from "../../lib/data";
-import { apiFetch, getCompanyId } from "../../lib/api";
-import { createClient } from "../../lib/supabase";
+import { isDemo } from "@/lib/data";
+import { apiFetch, getCompanyId } from "@/lib/api";
+import { createClient } from "@/lib/supabase";
 
 const demoVoices = [
   { id: "v1", name: "Hope", labels: "Canadian accent · warm · mid 30s", pick: true },

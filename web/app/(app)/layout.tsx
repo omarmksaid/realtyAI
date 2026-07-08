@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { isDemo } from "../../lib/data";
-import { createClient } from "../../lib/supabase";
-import { getCompanyId } from "../../lib/api";
+import { isDemo } from "@/lib/data";
+import { createClient } from "@/lib/supabase";
+import { getCompanyId } from "@/lib/api";
 import { Nav } from "./nav";
 import TrialBanner from "./trial-banner";
 

@@ -1,8 +1,8 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { isDemo } from "../../../lib/data";
-import { createClient } from "../../../lib/supabase";
-import { apiFetch, getCompanyId } from "../../../lib/api";
+import { isDemo } from "@/lib/data";
+import { createClient } from "@/lib/supabase";
+import { apiFetch, getCompanyId } from "@/lib/api";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;

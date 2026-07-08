@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { createClient } from "../../../lib/supabase";
-import { getCompanyId, apiFetch } from "../../../lib/api";
-import { isDemo, demoConversation, type LeadRow, type Turn, type Score } from "../../../lib/data";
+import { createClient } from "@/lib/supabase";
+import { getCompanyId, apiFetch } from "@/lib/api";
+import { isDemo, demoConversation, type LeadRow, type Turn, type Score } from "@/lib/data";
 
 const langLabels: Record<string, string> = {
   en: "English", fa: "\u0641\u0627\u0631\u0633\u06CC \u00B7 Farsi", zh: "\u4E2D\u6587 \u00B7 Mandarin",
