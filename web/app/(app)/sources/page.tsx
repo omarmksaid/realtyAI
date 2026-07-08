@@ -98,7 +98,34 @@ export default function Sources() {
       }
       setLive(true);
     } catch (e) {
-      console.error("Failed to fetch sources, using demo data", e);
+      console.error("Failed to fetch sources from API, trying Supabase directly", e);
+      // Fallback: fetch projects and lead_sources directly from Supabase
+      try {
+        const { createClient } = await import("@/lib/supabase");
+        const { getCompanyId } = await import("@/lib/api");
+        const supabase = createClient();
+        const companyId = await getCompanyId();
+        if (companyId) {
+          const [{ data: projRows }, { data: srcRows }] = await Promise.all([
+            supabase.from("projects").select("id, name, city").eq("company_id", companyId).neq("status", "archived"),
+            supabase.from("lead_sources").select("*").eq("company_id", companyId).eq("is_active", true),
+          ]);
+          if (projRows) setProjectsList(projRows.map((p: any) => ({ id: p.id, name: `${p.name}${p.city ? ` — ${p.city}` : ""}` })));
+          if (srcRows) {
+            const google = srcRows.filter((s: any) => s.provider === "google");
+            setGoogleDisplay(google.map((s: any) => ({
+              id: s.id,
+              name: s.label,
+              status: (s.config as any)?.test_received_at ? "Verified · test received" : "Waiting for test data",
+              leads: 0,
+              project: "",
+              project_id: "",
+              url: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/google?src=${s.id}`,
+            })));
+          }
+          setLive(true);
+        }
+      } catch {}
     } finally {
       setLoading(false);
     }
