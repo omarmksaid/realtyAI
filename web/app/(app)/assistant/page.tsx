@@ -5,6 +5,69 @@ import { apiFetch } from "@/lib/api";
 
 interface Msg { role: "user" | "assistant"; text: string; tools?: string }
 
+function AssistantMd({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let tableRows: string[][] = [];
+  let inTable = false;
+
+  function flushTable(key: number) {
+    if (tableRows.length === 0) return;
+    const headers = tableRows[0];
+    const dataRows = tableRows.slice(1).filter(r => !r.every(c => /^[-:]+$/.test(c.trim())));
+    elements.push(
+      <table key={key} style={{ width: "100%", borderCollapse: "collapse", margin: "8px 0", fontSize: 13 }}>
+        <thead>
+          <tr>{headers.map((h, i) => <th key={i} style={{ textAlign: "left", padding: "4px 8px", borderBottom: "2px solid var(--line)", fontWeight: 600 }}>{renderInline(h.trim())}</th>)}</tr>
+        </thead>
+        <tbody>
+          {dataRows.map((row, ri) => (
+            <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ padding: "4px 8px", borderBottom: "1px solid var(--line)" }}>{renderInline(cell.trim())}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    );
+    tableRows = [];
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Table detection
+    if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+      const cells = line.split("|").slice(1, -1);
+      tableRows.push(cells);
+      inTable = true;
+      continue;
+    } else if (inTable) {
+      flushTable(i);
+      inTable = false;
+    }
+
+    const trimmed = line.trim();
+    if (!trimmed) { elements.push(<div key={i} style={{ height: 8 }} />); continue; }
+    if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
+      elements.push(<div key={i} style={{ paddingLeft: 12, margin: "2px 0" }}>• {renderInline(trimmed.slice(2))}</div>);
+    } else if (/^\d+\.\s/.test(trimmed)) {
+      elements.push(<div key={i} style={{ paddingLeft: 8, margin: "2px 0" }}>{renderInline(trimmed)}</div>);
+    } else {
+      elements.push(<div key={i} style={{ margin: "4px 0" }}>{renderInline(trimmed)}</div>);
+    }
+  }
+  if (inTable) flushTable(lines.length);
+
+  return <>{elements}</>;
+}
+
+function renderInline(text: string): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
+    if (p.startsWith("*") && p.endsWith("*")) return <em key={i}>{p.slice(1, -1)}</em>;
+    return p;
+  });
+}
+
 const seed: Msg[] = [
   { role: "user", text: "Give me all the leads that came in on June 21st" },
   {
@@ -85,9 +148,9 @@ export default function Assistant() {
             m.role === "user" ? (
               <div key={i} className="bubble bubble-agent">{m.text}</div>
             ) : (
-              <div key={i} className="bubble bubble-lead" style={{ maxWidth: "78%", whiteSpace: "pre-wrap" }}>
+              <div key={i} className="bubble bubble-lead" style={{ maxWidth: "78%" }}>
                 {m.tools && <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6 }}>Looked up: {m.tools}</div>}
-                {m.text}
+                <AssistantMd text={m.text} />
               </div>
             )
           )}
