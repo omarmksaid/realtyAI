@@ -60,7 +60,7 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
   console.log("WhatsApp inbound from", phone, "text:", text.slice(0, 100));
 
   const { data: lead } = await supabaseAdmin
-    .from("leads").select("id, company_id, opted_out")
+    .from("leads").select("id, company_id, opted_out, phone, full_name, project_id, status")
     .eq("phone", phone).order("created_at", { ascending: false }).limit(1).single();
   if (!lead) { console.log("No lead found for phone", phone); return c.text("ok"); }
 
