@@ -133,11 +133,13 @@ export default function Today() {
           });
         }
 
-        // Fetch hot leads from Supabase
+        // Fetch leads that need attention: hot scored, engaged, or handed off
         const { data: hotLeads } = await supabase
           .from("leads")
           .select("*, projects(name)")
-          .eq("score", "hot")
+          .eq("company_id", companyId)
+          .in("status", ["engaged", "handed_off", "qualified"])
+          .gte("created_at", since)
           .order("created_at", { ascending: false })
           .limit(10);
 
@@ -184,11 +186,23 @@ export default function Today() {
       <h1 className="page-title">Good morning</h1>
       <p className="page-sub">Here&#39;s what happened while you were out.</p>
 
-      <div className="grid-3" style={{ marginBottom: 16, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-        <div className="card stat"><b>{stats.newLeads}</b><span>new leads overnight</span></div>
-        <div className="card stat"><b>{stats.engaged}</b><span>engaged in conversation</span></div>
-        <div className="card stat"><b>{stats.handoffs}</b><span>flagged for your team</span></div>
-        <div className="card stat"><b>{spend}</b><span>spend this month · {spendPerLead}</span></div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 }}>
+        <div className="card" style={{ padding: "20px 22px" }}>
+          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: '"Source Serif 4", Georgia, serif', lineHeight: 1 }}>{stats.newLeads}</div>
+          <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>new leads overnight</div>
+        </div>
+        <div className="card" style={{ padding: "20px 22px" }}>
+          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: '"Source Serif 4", Georgia, serif', lineHeight: 1 }}>{stats.engaged}</div>
+          <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>engaged in conversation</div>
+        </div>
+        <div className="card" style={{ padding: "20px 22px" }}>
+          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: '"Source Serif 4", Georgia, serif', lineHeight: 1 }}>{stats.handoffs}</div>
+          <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>flagged for your team</div>
+        </div>
+        <div className="card" style={{ padding: "20px 22px" }}>
+          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: '"Source Serif 4", Georgia, serif', lineHeight: 1 }}>{spend}</div>
+          <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>spend this month{spendPerLead ? ` · ${spendPerLead}` : ""}</div>
+        </div>
       </div>
 
       <div className="memo">
@@ -199,30 +213,32 @@ export default function Today() {
         {digest.body.map((p, i) => <Md key={i} text={p} />)}
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-pad" style={{ paddingBottom: 0 }}>
-          <p className="section-label">Call these first</p>
+      {hot.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="card-pad" style={{ paddingBottom: 0 }}>
+            <p className="section-label">Call these first</p>
+          </div>
+          <table>
+            <tbody>
+              {hot.map((l) => (
+                <tr key={l.id} className="rowlink" style={{ cursor: "pointer" }}>
+                  <td style={{ width: 180 }}>
+                    <Link href={`/conversations/${l.id}`}><b>{l.name}</b></Link>
+                    <div style={{ color: "var(--muted)", fontSize: 12.5 }}>{l.project}</div>
+                  </td>
+                  <td>
+                    <span className={`chip ${l.score === "hot" ? "chip-hot" : "chip-warm"}`} style={{ textTransform: "capitalize" }}>{l.score}</span>
+                    {l.scoreReason && <span className="chip-reason">{l.scoreReason}</span>}
+                  </td>
+                  <td style={{ width: 130, textAlign: "right" }}>
+                    <span className="chip chip-lang">{l.langLabel}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <table>
-          <tbody>
-            {hot.map((l) => (
-              <tr key={l.id} className="rowlink">
-                <td style={{ width: 180 }}>
-                  <Link href={`/conversations/${l.id}`}><b>{l.name}</b></Link>
-                  <div style={{ color: "var(--muted)", fontSize: 12.5 }}>{l.project}</div>
-                </td>
-                <td>
-                  <span className="chip chip-hot">Hot</span>
-                  <span className="chip-reason">{l.scoreReason}</span>
-                </td>
-                <td style={{ width: 130, textAlign: "right" }}>
-                  <span className="chip chip-lang">{l.langLabel}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      )}
     </>
   );
 }
