@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { getCompanyId } from "@/lib/api";
 import { isDemo, demoLeads, type LeadRow, type Score } from "@/lib/data";
@@ -24,6 +24,8 @@ function mapRow(r: any): LeadRow {
   return {
     id: r.id,
     name: r.full_name || r.name || "Unknown",
+    phone: r.phone || "",
+    email: r.email || "",
     project: r.projects?.name || "",
     source: r.provider === "google" ? "google" : "meta",
     status: r.status || "new",
@@ -37,6 +39,7 @@ function mapRow(r: any): LeadRow {
 }
 
 export default function Leads() {
+  const router = useRouter();
   const [leads, setLeads] = useState<LeadRow[]>(isDemo ? demoLeads : []);
   const [loading, setLoading] = useState(!isDemo);
 
@@ -83,16 +86,18 @@ export default function Leads() {
           </thead>
           <tbody>
             {leads.map((l) => (
-              <tr key={l.id} className="rowlink">
+              <tr key={l.id} className="rowlink" onClick={() => router.push(`/conversations/${l.id}`)} style={{ cursor: "pointer" }}>
                 <td>
-                  <Link href={`/conversations/${l.id}`}><b>{l.name}</b></Link>
-                  <div style={{ color: "var(--muted)", fontSize: 12.5 }}>+1 647 555-01{l.id.slice(-1)}3 · {l.name.split(" ")[0].toLowerCase()}@gmail.com</div>
+                  <b>{l.name}</b>
+                  {(l.phone || l.email) && (
+                    <div style={{ color: "var(--muted)", fontSize: 12.5 }}>{[l.phone, l.email].filter(Boolean).join(" · ")}</div>
+                  )}
                 </td>
                 <td>{l.project}</td>
                 <td>
                   <span className={`chip ${scoreChip[l.score]}`}>{scoreWord[l.score]}</span>
                 </td>
-                <td style={{ textTransform: "capitalize" }}>{l.status}</td>
+                <td style={{ textTransform: "capitalize" }}>{l.status.replace("_", " ")}</td>
                 <td><span className="chip chip-lang">{l.langLabel}</span></td>
                 <td style={{ textTransform: "capitalize", color: "var(--muted)" }}>{l.source}</td>
                 <td style={{ color: "var(--muted)" }}>{l.receivedAt}</td>
