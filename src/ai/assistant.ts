@@ -63,6 +63,70 @@ const tools: Anthropic.Tool[] = [
       properties: {},
     },
   },
+  {
+    name: "search_transcripts",
+    description: "Full-text search across all conversation messages (WhatsApp, calls, email). Use when the user asks about what a lead said or discussed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search term or phrase" },
+        limit: { type: "number", description: "Max results, default 20" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "get_team",
+    description: "List team members, their roles, on-call status, and contact info.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "get_routing_rules",
+    description: "List the after-hours routing rules — which channels fire and when.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "get_costs",
+    description: "Get cost breakdown for a date range, grouped by category (voice, whatsapp, email, sms, llm, embedding).",
+    input_schema: {
+      type: "object",
+      properties: {
+        date_from: { type: "string", description: "ISO date" },
+        date_to: { type: "string", description: "ISO date" },
+      },
+    },
+  },
+  {
+    name: "get_company_info",
+    description: "Get company details: name, timezone, plan, trial status, business hours.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "get_lead_details",
+    description: "Get full details for a specific lead by ID: contact info, form data, score, status, all conversations.",
+    input_schema: {
+      type: "object",
+      properties: { lead_id: { type: "string" } },
+      required: ["lead_id"],
+    },
+  },
+  {
+    name: "get_sources",
+    description: "List connected lead sources (Meta, Google) with their forms and project mappings.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
 
 function dayRangeUtc(tz: string, from?: string, to?: string) {
@@ -144,6 +208,107 @@ async function execTool(companyId: string, tz: string, name: string, input: any)
     const counts: Record<string, number> = {};
     for (const l of data ?? []) counts[key(l)] = (counts[key(l)] ?? 0) + 1;
     return JSON.stringify(counts);
+  }
+
+  if (name === "search_transcripts") {
+    const { data } = await supabaseAdmin
+      .from("messages")
+      .select("content, role, direction, created_at, conversations!inner(channel, lead_id, leads!inner(full_name, projects(name)))")
+      .eq("company_id", companyId)
+      .textSearch("search", input.query)
+      .order("created_at", { ascending: false })
+      .limit(Math.min(input.limit ?? 20, 50));
+    return JSON.stringify((data ?? []).map((m: any) => ({
+      lead: m.conversations.leads.full_name,
+      project: m.conversations.leads.projects?.name,
+      channel: m.conversations.channel,
+      who: m.role,
+      text: m.content?.slice(0, 300),
+      at: DateTime.fromISO(m.created_at).setZone(tz).toFormat("MMM d, h:mm a"),
+    })));
+  }
+
+  if (name === "get_team") {
+    const { data } = await supabaseAdmin
+      .from("memberships")
+      .select("email, role, phone, on_call")
+      .eq("company_id", companyId);
+    return JSON.stringify({ members: data ?? [] });
+  }
+
+  if (name === "get_routing_rules") {
+    const { data } = await supabaseAdmin
+      .from("routing_rules")
+      .select("label, day_type, start_time, end_time, channels, followup_delay_min, is_active")
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .order("priority");
+    return JSON.stringify({ rules: data ?? [] });
+  }
+
+  if (name === "get_costs") {
+    const { startUtc, endUtc } = dayRangeUtc(tz, input.date_from, input.date_to);
+    const { data } = await supabaseAdmin
+      .from("costs")
+      .select("category, amount_usd")
+      .eq("company_id", companyId)
+      .gte("created_at", startUtc).lte("created_at", endUtc);
+    const totals: Record<string, number> = {};
+    for (const c of data ?? []) totals[c.category] = (totals[c.category] ?? 0) + c.amount_usd;
+    const total = Object.values(totals).reduce((a, b) => a + b, 0);
+    return JSON.stringify({ totals, total: Math.round(total * 100) / 100 });
+  }
+
+  if (name === "get_company_info") {
+    const { data } = await supabaseAdmin
+      .from("companies")
+      .select("name, timezone, settings, plan, billing_status, trial_ends_at, created_at")
+      .eq("id", companyId)
+      .single();
+    if (!data) return "Company not found.";
+    return JSON.stringify({
+      name: data.name,
+      timezone: data.timezone,
+      plan: (data as any).plan ?? "trial",
+      billing_status: (data as any).billing_status ?? "trial",
+      trial_ends_at: (data as any).trial_ends_at,
+      business_hours: (data.settings as any)?.business_hours ?? "default (Mon-Fri 9-5)",
+      created_at: data.created_at,
+    });
+  }
+
+  if (name === "get_lead_details") {
+    const { data: lead } = await supabaseAdmin
+      .from("leads")
+      .select("*, projects(name)")
+      .eq("id", input.lead_id).eq("company_id", companyId).single();
+    if (!lead) return "No such lead in this company.";
+    const { data: convos } = await supabaseAdmin
+      .from("conversations")
+      .select("id, channel, created_at")
+      .eq("company_id", companyId).eq("lead_id", input.lead_id);
+    return JSON.stringify({
+      name: lead.full_name, phone: lead.phone, email: lead.email,
+      project: (lead as any).projects?.name, status: lead.status,
+      score: lead.score, score_reason: lead.score_reason,
+      language: lead.detected_language, source: lead.provider,
+      form_data: lead.form_data, opted_out: lead.opted_out,
+      received: DateTime.fromISO(lead.created_at).setZone(tz).toFormat("MMM d, h:mm a"),
+      after_hours: lead.received_after_hours,
+      conversations: (convos ?? []).map((c: any) => ({ id: c.id, channel: c.channel })),
+    });
+  }
+
+  if (name === "get_sources") {
+    const { data } = await supabaseAdmin
+      .from("lead_sources")
+      .select("id, provider, label, config, is_active")
+      .eq("company_id", companyId).eq("is_active", true);
+    return JSON.stringify((data ?? []).map((s: any) => ({
+      id: s.id, provider: s.provider, label: s.label,
+      default_project_id: s.config?.default_project_id ?? null,
+      form_count: Object.keys(s.config?.form_project_map ?? {}).length,
+    })));
   }
 
   return "Unknown tool";
