@@ -58,15 +58,17 @@ export default function Conversation() {
   const [turns, setTurns] = useState<Turn[]>(isDemo ? demoConversation.turns : []);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(!isDemo);
+  const [convId, setConvId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isDemo) return;
     let cancelled = false;
+    const supabase = createClient();
+
     (async () => {
       try {
         const companyId = await getCompanyId();
         if (!companyId) { setLoading(false); return; }
-        const supabase = createClient();
 
         // Fetch lead
         const { data: leadData } = await supabase
@@ -77,11 +79,9 @@ export default function Conversation() {
 
         if (leadData && !cancelled) {
           setLead(mapLead(leadData));
-          setMode(leadData.takeover ? "human" : "ai");
         }
 
         // Fetch conversation messages
-        // First find the conversation for this lead
         const { data: convData } = await supabase
           .from("conversations")
           .select("id, status, channel")
@@ -91,7 +91,10 @@ export default function Conversation() {
           .maybeSingle();
 
         if (convData) {
-          if (!cancelled) setMode(convData.status === "handed_off" ? "human" : "ai");
+          if (!cancelled) {
+            setConvId(convData.id);
+            setMode(convData.status === "handed_off" ? "human" : "ai");
+          }
           const { data: msgs } = await supabase
             .from("messages")
             .select("*")
@@ -103,13 +106,40 @@ export default function Conversation() {
           }
         }
       } catch {
-        // keep demo data as fallback
+        // keep defaults on failure
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
+
     return () => { cancelled = true; };
   }, [id]);
+
+  // Real-time subscription for new messages
+  useEffect(() => {
+    if (isDemo || !convId) return;
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`messages:${convId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages", filter: `conversation_id=eq.${convId}` },
+        (payload) => {
+          const msg = payload.new;
+          setTurns((prev) => {
+            // Avoid duplicates
+            if (prev.some((t) => t.id === msg.id)) return prev;
+            return [...prev, mapTurn(msg)];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [convId]);
 
   async function takeOver() {
     if (!isDemo) {
