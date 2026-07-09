@@ -121,6 +121,12 @@ export async function generateReply(conversationId: string) {
   if (callbackMatch) {
     try {
       const requestedTime = new Date(callbackMatch[1]).toISOString();
+      // Cancel any existing pending callbacks for this lead (they changed their mind)
+      await supabaseAdmin.from("callbacks")
+        .update({ status: "cancelled" })
+        .eq("lead_id", convo.lead_id)
+        .eq("status", "pending");
+      // Insert the new callback
       await supabaseAdmin.from("callbacks").insert({
         company_id: convo.company_id,
         lead_id: convo.lead_id,
