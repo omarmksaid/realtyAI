@@ -116,6 +116,32 @@ export async function generateReply(conversationId: string) {
     amountUsd: llmCost("claude-sonnet-4-6", resp.usage.input_tokens, resp.usage.output_tokens),
     meta: { in: resp.usage.input_tokens, out: resp.usage.output_tokens },
   });
+  // Score the lead based on conversation so far (non-blocking)
+  (async () => {
+    try {
+      const convoSummary = (history ?? []).slice(-8).map(m =>
+        `${m.role === "lead" ? "Lead" : "AI"}: ${m.content?.slice(0, 200)}`
+      ).join("\n");
+      const scoreResp = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 100,
+        system: "You score real estate leads based on their conversation. Respond with ONLY a JSON object: {\"score\":\"hot|warm|cold\",\"reason\":\"one sentence\",\"language\":\"ISO 639-1 code\"}\n\nScoring:\n- hot: asked about pricing/deposits/booking, wants to buy soon, comparing projects, requested callback\n- warm: engaged, asking questions, interested but not urgent\n- cold: no reply, generic inquiry, just browsing",
+        messages: [{ role: "user", content: `Score this lead:\n${convoSummary}` }],
+      });
+      const scoreText = scoreResp.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
+      const scoreJson = JSON.parse(scoreText);
+      if (scoreJson.score && ["hot", "warm", "cold"].includes(scoreJson.score)) {
+        await supabaseAdmin.from("leads").update({
+          score: scoreJson.score,
+          score_reason: scoreJson.reason ?? null,
+          detected_language: scoreJson.language ?? null,
+        }).eq("id", convo.lead_id);
+      }
+    } catch (e) {
+      console.error("Lead scoring failed (non-blocking):", e);
+    }
+  })();
+
   // Detect [CALLBACK:...] tag and save to callbacks table
   const callbackMatch = text.match(/\[CALLBACK:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\]/);
   if (callbackMatch) {
