@@ -46,11 +46,13 @@ export default function Conversations() {
       const supabase = createClient();
 
       // Direct text search on messages using the generated tsvector column
+      // Convert search terms to tsquery format: "742 Blossom Hill" -> "742 & Blossom & Hill"
+      const tsQuery = query.split(/\s+/).filter(Boolean).join(" & ");
       const { data, error } = await supabase
         .from("messages")
         .select("id, content, direction, role, created_at, conversations!inner(channel, lead_id, leads!inner(full_name, projects(name)))")
         .eq("company_id", companyId)
-        .textSearch("search", query)
+        .textSearch("search", tsQuery)
         .order("created_at", { ascending: false })
         .limit(20);
 
