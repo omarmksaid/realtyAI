@@ -17,9 +17,9 @@ function mapLead(r: any): LeadRow {
   const score: Score = r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : "cold";
   return {
     id: r.id,
-    name: r.name || "Unknown",
+    name: r.full_name || r.name || "Unknown",
     project: r.projects?.name || r.project_name || "",
-    source: r.source === "google" ? "google" : "meta",
+    source: r.provider === "google" ? "google" : "meta",
     status: r.status || "new",
     channel: r.channel || "whatsapp",
     language: lang,
@@ -41,7 +41,7 @@ function mapTurn(m: any): Turn {
   return {
     id: m.id,
     role,
-    text: m.body || m.text || "",
+    text: m.content || m.body || m.text || "",
     gloss: m.gloss || undefined,
     at: m.created_at
       ? new Date(m.created_at).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
@@ -84,13 +84,14 @@ export default function Conversation() {
         // First find the conversation for this lead
         const { data: convData } = await supabase
           .from("conversations")
-          .select("id, takeover")
+          .select("id, status, channel")
           .eq("lead_id", id)
+          .order("created_at", { ascending: false })
           .limit(1)
-          .single();
+          .maybeSingle();
 
         if (convData) {
-          if (!cancelled) setMode(convData.takeover ? "human" : "ai");
+          if (!cancelled) setMode(convData.status === "handed_off" ? "human" : "ai");
           const { data: msgs } = await supabase
             .from("messages")
             .select("*")
