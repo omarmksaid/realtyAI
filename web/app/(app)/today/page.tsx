@@ -82,25 +82,39 @@ export default function Today() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
 
-        // Fetch company stats from API
-        const companyRes = await apiFetch("/agent/company");
-        if (companyRes.ok) {
-          const company = await companyRes.json();
-          if (company.stats) {
-            setStats({
-              newLeads: company.stats.new_leads ?? 0,
-              engaged: company.stats.engaged ?? 0,
-              engagementRate: company.stats.engagement_rate ?? "0%",
-              handoffs: company.stats.handoffs ?? 0,
-            });
-          }
-          if (company.spend != null) {
-            setSpend(`$${company.spend}`);
-            const perLead = company.stats?.new_leads
-              ? `~$${(company.spend / company.stats.new_leads).toFixed(2)}/lead`
-              : "";
-            setSpendPerLead(perLead);
-          }
+        // Fetch stats directly from Supabase
+        const { getCompanyId } = await import("@/lib/api");
+        const companyId = await getCompanyId();
+        if (!companyId) return;
+
+        const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+        const { data: recentLeads } = await supabase
+          .from("leads")
+          .select("id, status")
+          .eq("company_id", companyId)
+          .gte("created_at", since);
+
+        if (recentLeads) {
+          const newLeads = recentLeads.length;
+          const engaged = recentLeads.filter(l => ["engaged", "qualified", "handed_off"].includes(l.status)).length;
+          const handoffs = recentLeads.filter(l => l.status === "handed_off").length;
+          setStats({ newLeads, engaged, engagementRate: newLeads ? `${Math.round(engaged / newLeads * 100)}%` : "0%", handoffs });
+        }
+
+        // Fetch this month's spend
+        const monthStart = new Date();
+        monthStart.setDate(1);
+        monthStart.setHours(0, 0, 0, 0);
+        const { data: costs } = await supabase
+          .from("cost_events")
+          .select("amount_usd")
+          .eq("company_id", companyId)
+          .gte("created_at", monthStart.toISOString());
+        if (costs) {
+          const total = costs.reduce((sum, c) => sum + c.amount_usd, 0);
+          setSpend(`$${total.toFixed(2)}`);
+          const newLeadCount = recentLeads?.length ?? 0;
+          if (newLeadCount > 0) setSpendPerLead(`~$${(total / newLeadCount).toFixed(2)}/lead`);
         }
 
         // Fetch today’s digest from Supabase
