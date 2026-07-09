@@ -72,6 +72,7 @@ export default function Today() {
   const [hot, setHot] = useState<LeadRow[]>(isDemo ? demoLeads.filter((l) => l.score === "hot") : []);
   const [spend, setSpend] = useState(isDemo ? "$247" : "$0");
   const [spendPerLead, setSpendPerLead] = useState(isDemo ? "~$0.41/lead" : "");
+  const [loading, setLoading] = useState(!isDemo);
 
   useEffect(() => {
     if (isDemo) return;
@@ -159,10 +160,24 @@ export default function Today() {
         }
       } catch {
         // Keep current state on failure
+      } finally {
+        setLoading(false);
       }
     }
     load();
   }, []);
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "60vh", color: "var(--muted)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+          <p>Loading your briefing...</p>
+          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
