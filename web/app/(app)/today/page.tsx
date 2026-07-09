@@ -8,15 +8,59 @@ import { apiFetch } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 
 function Md({ text }: { text: string }) {
-  // minimal **bold** rendering for the memo
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return (
-    <p>
-      {parts.map((p, i) =>
-        p.startsWith("**") ? <strong key={i}>{p.slice(2, -2)}</strong> : p
-      )}
-    </p>
-  );
+  // Convert markdown to HTML-like rendering
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+    if (!line) continue;
+
+    // Horizontal rules
+    if (/^---+$/.test(line)) {
+      elements.push(<hr key={i} style={{ border: "none", borderTop: "1px solid var(--line)", margin: "16px 0" }} />);
+      continue;
+    }
+
+    // Headers
+    if (line.startsWith("### ")) {
+      elements.push(<h4 key={i} style={{ fontSize: 15, fontWeight: 600, margin: "14px 0 6px", color: "var(--ink)" }}>{renderInline(line.slice(4))}</h4>);
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      elements.push(<h3 key={i} style={{ fontSize: 17, fontWeight: 600, margin: "18px 0 8px", fontFamily: '"Source Serif 4", Georgia, serif', color: "var(--accent-deep)" }}>{renderInline(line.slice(3))}</h3>);
+      continue;
+    }
+    if (line.startsWith("# ")) {
+      elements.push(<h2 key={i} style={{ fontSize: 20, fontWeight: 600, margin: "20px 0 10px", fontFamily: '"Source Serif 4", Georgia, serif' }}>{renderInline(line.slice(2))}</h2>);
+      continue;
+    }
+
+    // List items
+    if (/^\d+\.\s/.test(line)) {
+      elements.push(<p key={i} style={{ margin: "6px 0", paddingLeft: 8 }}>{renderInline(line)}</p>);
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      elements.push(<p key={i} style={{ margin: "4px 0", paddingLeft: 12 }}>• {renderInline(line.slice(2))}</p>);
+      continue;
+    }
+
+    // Regular paragraph
+    elements.push(<p key={i} style={{ margin: "8px 0" }}>{renderInline(line)}</p>);
+  }
+
+  return <>{elements}</>;
+}
+
+function renderInline(text: string): React.ReactNode[] {
+  // Handle **bold**, *italic*, and emoji
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
+    if (p.startsWith("*") && p.endsWith("*")) return <em key={i}>{p.slice(1, -1)}</em>;
+    return p;
+  });
 }
 
 export default function Today() {
