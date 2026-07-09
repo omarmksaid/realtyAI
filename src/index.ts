@@ -39,6 +39,8 @@ app.use("/assistant/*", requireAuth);
 app.route("/assistant", assistantRoutes); // data-assistant chat + voice settings         // takeover, hand-back, agent messages, knowledge ingestion
 
 // Trigger morning digest manually (dev/demo only)
+import { supabaseAdmin } from "./lib/supabase";
+import { env } from "./lib/env";
 app.post("/webhooks/trigger-digest", async (c) => {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
   const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -88,7 +90,6 @@ app.post("/webhooks/test", async (c) => {
 });
 
 // Unsubscribe endpoint (CASL): GET /u/:leadId
-import { supabaseAdmin } from "./lib/supabase";
 app.get("/u/:leadId", async (c) => {
   await supabaseAdmin.from("leads")
     .update({ opted_out: true, status: "opted_out" })
