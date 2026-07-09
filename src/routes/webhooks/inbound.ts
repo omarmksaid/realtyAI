@@ -55,19 +55,20 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
     const desc = await describeInboundMedia(url, String(form[`MediaContentType${m}`] ?? ""));
     text = `${text}\n[Lead sent an image: ${desc}]`.trim();
   }
-  if (!text) return c.text("ok");
+  const twimlOk = () => c.html("<Response></Response>", 200, { "Content-Type": "text/xml" });
+  if (!text) return twimlOk();
 
   console.log("WhatsApp inbound from", phone, "text:", text.slice(0, 100));
 
   const { data: lead } = await supabaseAdmin
     .from("leads").select("id, company_id, opted_out, phone, full_name, project_id, status")
     .eq("phone", phone).order("created_at", { ascending: false }).limit(1).single();
-  if (!lead) { console.log("No lead found for phone", phone); return c.text("ok"); }
+  if (!lead) { console.log("No lead found for phone", phone); return twimlOk(); }
 
   // STOP handling (compliance)
   if (/^(stop|unsubscribe|opt out)$/i.test(text)) {
     await supabaseAdmin.from("leads").update({ opted_out: true, status: "opted_out" }).eq("id", lead.id);
-    return c.text("ok");
+    return twimlOk();
   }
 
   // Lead engaged -> cancel any scheduled call/email escalations
@@ -98,7 +99,7 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
   const { automationActive } = await import("../../lib/billing");
   const { data: co } = await supabaseAdmin
     .from("companies").select("plan, billing_status, trial_ends_at").eq("id", lead.company_id).single();
-  if (!co || !automationActive(co as any)) { console.log("Automation inactive for", lead.company_id); return c.text("ok"); }
+  if (!co || !automationActive(co as any)) { console.log("Automation inactive for", lead.company_id); return twimlOk(); }
 
   console.log("Generating AI reply for conversation", convo!.id);
   const reply = await generateReply(convo!.id);
@@ -127,7 +128,7 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
     direction: "outbound", role: "ai", content: reply.text,
     provider_message_id: sent.providerMessageId,
   });
-  return c.text("ok");
+  return c.html("<Response></Response>", 200, { "Content-Type": "text/xml" });
 });
 
 /* Delivery receipts: Twilio POSTs status transitions (sent/delivered/read/failed).
@@ -151,7 +152,7 @@ inboundWebhooks.post("/twilio/status", async (c) => {
       .update({ meta: { ...(msg.meta ?? {}), status, ...(status === "failed" ? { error_code: form.ErrorCode } : {}) } })
       .eq("id", msg.id);
   }
-  return c.text("ok");
+  return c.html("<Response></Response>", 200, { "Content-Type": "text/xml" });
 });
 
 /* Vapi end-of-call report -> store transcript + recording. */
@@ -195,5 +196,5 @@ inboundWebhooks.post("/vapi", async (c) => {
     });
   }
   await supabaseAdmin.from("conversations").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", convo.id);
-  return c.text("ok");
+  return c.html("<Response></Response>", 200, { "Content-Type": "text/xml" });
 });
