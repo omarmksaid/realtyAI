@@ -31,7 +31,7 @@ function Snippet({ text }: { text: string }) {
 }
 
 export default function Conversations() {
-  const [q, setQ] = useState("deposit");
+  const [q, setQ] = useState(isDemo ? "deposit" : "");
   const [results, setResults] = useState<SearchResult[]>(isDemo ? demoResults : []);
   const [searching, setSearching] = useState(false);
 
@@ -42,7 +42,7 @@ export default function Conversations() {
     setSearching(true);
     try {
       const companyId = await getCompanyId();
-      if (!companyId) { setResults(demoResults); setSearching(false); return; }
+      if (!companyId) { setSearching(false); return; }
       const supabase = createClient();
       const { data, error } = await supabase.rpc("search_transcripts", {
         query: query,
