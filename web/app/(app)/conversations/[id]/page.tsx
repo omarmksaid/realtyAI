@@ -59,6 +59,7 @@ export default function Conversation() {
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(!isDemo);
   const [convId, setConvId] = useState<string | null>(null);
+  const [leadRaw, setLeadRaw] = useState<any>(null);
 
   useEffect(() => {
     if (isDemo) return;
@@ -79,6 +80,7 @@ export default function Conversation() {
 
         if (leadData && !cancelled) {
           setLead(mapLead(leadData));
+          setLeadRaw(leadData);
         }
 
         // Fetch conversation messages
@@ -230,29 +232,29 @@ export default function Conversation() {
       </p>
 
       <div className="card card-pad" style={{ marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px 24px" }}>
-        <div>
-          <div className="section-label" style={{ marginBottom: 4 }}>Phone</div>
-          <a href="tel:+16475550193" style={{ fontWeight: 600, color: "var(--accent-deep)" }}>+1 (647) 555-0193</a>
-        </div>
-        <div>
-          <div className="section-label" style={{ marginBottom: 4 }}>Email</div>
-          <a href="mailto:reza.k@gmail.com" style={{ fontWeight: 600, color: "var(--accent-deep)" }}>reza.k@gmail.com</a>
-        </div>
+        {leadRaw?.phone && (
+          <div>
+            <div className="section-label" style={{ marginBottom: 4 }}>Phone</div>
+            <a href={`tel:${leadRaw.phone}`} style={{ fontWeight: 600, color: "var(--accent-deep)" }}>{leadRaw.phone}</a>
+          </div>
+        )}
+        {leadRaw?.email && (
+          <div>
+            <div className="section-label" style={{ marginBottom: 4 }}>Email</div>
+            <a href={`mailto:${leadRaw.email}`} style={{ fontWeight: 600, color: "var(--accent-deep)" }}>{leadRaw.email}</a>
+          </div>
+        )}
         <div>
           <div className="section-label" style={{ marginBottom: 4 }}>Source</div>
-          <span style={{ fontSize: 14 }}>Meta · &quot;Riv 5% Deposit&quot; campaign</span>
+          <span style={{ fontSize: 14, textTransform: "capitalize" }}>{lead.source}</span>
         </div>
         <div>
-          <div className="section-label" style={{ marginBottom: 4 }}>Form answers</div>
-          <span style={{ fontSize: 14 }}>Budget: $700–800K · Timeline: 1–3 months</span>
+          <div className="section-label" style={{ marginBottom: 4 }}>Status</div>
+          <span style={{ fontSize: 14, textTransform: "capitalize" }}>{lead.status}</span>
         </div>
         <div>
-          <div className="section-label" style={{ marginBottom: 4 }}>Cost so far</div>
-          <span style={{ fontSize: 14 }}>$1.12 <span style={{ color: "var(--muted)" }}>· 1 call, 9 messages</span></span>
-        </div>
-        <div>
-          <div className="section-label" style={{ marginBottom: 4 }}>Consent</div>
-          <span style={{ fontSize: 14, color: "var(--muted)" }}>Form submitted Jun 21, 11:47 PM</span>
+          <div className="section-label" style={{ marginBottom: 4 }}>Received</div>
+          <span style={{ fontSize: 14, color: "var(--muted)" }}>{lead.receivedAt}</span>
         </div>
       </div>
 

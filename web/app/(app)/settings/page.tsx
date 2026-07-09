@@ -29,6 +29,8 @@ export default function Settings() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [spend, setSpend] = useState<Record<string, number>>({});
+  const [totalSpend, setTotalSpend] = useState(0);
 
   const fetchTeam = useCallback(async () => {
     if (isDemo) return;
@@ -54,6 +56,26 @@ export default function Settings() {
           phone: m.phone,
           on_call: m.on_call ?? false,
         })));
+      }
+
+      // Fetch this month's spend
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const { data: costs } = await supabase
+        .from("cost_events")
+        .select("category, amount_usd")
+        .eq("company_id", companyId)
+        .gte("created_at", monthStart.toISOString());
+      if (costs) {
+        const totals: Record<string, number> = {};
+        let total = 0;
+        for (const c of costs) {
+          totals[c.category] = (totals[c.category] ?? 0) + c.amount_usd;
+          total += c.amount_usd;
+        }
+        setSpend(totals);
+        setTotalSpend(Math.round(total * 100) / 100);
       }
     } catch (e) {
       console.error("Failed to fetch team", e);
@@ -192,6 +214,24 @@ export default function Settings() {
           <input placeholder="teammate@company.com" style={{ flex: 1 }} value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendInvite()} />
           <button className="btn btn-primary" disabled={inviting} onClick={sendInvite}>{inviting ? "Sending…" : "Send invite"}</button>
         </div>
+      </div>
+      <div className="card card-pad">
+        <p className="section-label">Usage this month</p>
+        {totalSpend === 0 && !isDemo ? (
+          <p style={{ color: "var(--muted)", fontSize: 14 }}>No usage yet this month.</p>
+        ) : (
+          <>
+            <div style={{ fontSize: 28, fontWeight: 600, marginBottom: 12 }}>${totalSpend.toFixed(2)}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+              {Object.entries(spend).map(([cat, amount]) => (
+                <div key={cat} style={{ fontSize: 13 }}>
+                  <span style={{ textTransform: "capitalize", fontWeight: 500 }}>{cat}</span>
+                  <span style={{ color: "var(--muted)", marginLeft: 8 }}>${amount.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </>
   );
