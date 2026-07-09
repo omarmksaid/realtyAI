@@ -4,7 +4,7 @@ import { demoProjects, isDemo } from "@/lib/data";
 import { createClient } from "@/lib/supabase";
 import { apiFetch, getCompanyId } from "@/lib/api";
 
-interface Doc { id: string; name: string; source: string; status: string }
+interface Doc { id: string; name: string; source: string; status: string; content?: string }
 interface Project {
   id: string; name: string; city: string | null; leads30d: number;
   driveLinked: boolean; docs: Doc[];
@@ -24,6 +24,7 @@ export default function Projects() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [driveFolderUrls, setDriveFolderUrls] = useState<Record<string, string>>({});
   const [linkingSaving, setLinkingSaving] = useState(false);
+  const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newCity, setNewCity] = useState("");
@@ -44,11 +45,22 @@ export default function Projects() {
 
       if (!rows?.length) { setProjects([]); setLoading(false); return; }
 
-      // Fetch documents for all projects
+      // Fetch documents and their chunks for all projects
       const { data: docs } = await supabase
         .from("documents")
         .select("id, name, source, status, project_id")
         .eq("company_id", companyId);
+
+      // Fetch chunk content grouped by document
+      const { data: chunks } = await supabase
+        .from("doc_chunks")
+        .select("document_id, content")
+        .eq("company_id", companyId)
+        .order("created_at");
+      const chunksByDoc: Record<string, string> = {};
+      for (const c of chunks ?? []) {
+        chunksByDoc[c.document_id] = (chunksByDoc[c.document_id] ?? "") + (chunksByDoc[c.document_id] ? "\n" : "") + c.content;
+      }
 
       // Fetch lead counts per project (last 30 days)
       const since = new Date(Date.now() - 30 * 86400_000).toISOString();
@@ -71,7 +83,7 @@ export default function Projects() {
         driveLinked: false, // TODO: check projects.drive_folder_url
         docs: (docs ?? [])
           .filter((d: any) => d.project_id === r.id)
-          .map((d: any) => ({ id: d.id, name: d.name, source: d.source, status: d.status })),
+          .map((d: any) => ({ id: d.id, name: d.name, source: d.source, status: d.status, content: chunksByDoc[d.id] })),
       }));
       setProjects(mapped);
       if (!open || !mapped.find((p) => p.id === open)) setOpen(mapped[0]?.id ?? null);
@@ -149,6 +161,19 @@ export default function Projects() {
       console.error("Failed to save drive folder", e);
     } finally {
       setLinkingSaving(false);
+    }
+  }
+
+  async function deleteDoc(docId: string) {
+    if (isDemo) return;
+    if (!confirm("Delete this knowledge source? The AI will no longer use it.")) return;
+    try {
+      const supabase = createClient();
+      await supabase.from("doc_chunks").delete().eq("document_id", docId);
+      await supabase.from("documents").delete().eq("id", docId);
+      fetchProjects();
+    } catch (e) {
+      console.error("Failed to delete document:", e);
     }
   }
 
@@ -232,14 +257,27 @@ export default function Projects() {
                 <>
                   <p className="section-label">Sources</p>
                   {p.docs.map((d) => (
-                    <div className="doc-row" key={d.id}>
-                      <span>
-                        <span className="chip chip-lang" style={{ marginRight: 10 }}>{sourceIcon[d.source]}</span>
-                        {d.name}
-                      </span>
-                      <span className={`chip ${statusColor[d.status]}`}>
-                        {d.status === "ready" ? "Ready" : "Processing…"}
-                      </span>
+                    <div key={d.id}>
+                      <div className="doc-row" style={{ cursor: d.content ? "pointer" : "default" }} onClick={() => d.content && setExpandedDoc(expandedDoc === d.id ? null : d.id)}>
+                        <span>
+                          <span className="chip chip-lang" style={{ marginRight: 10 }}>{sourceIcon[d.source]}</span>
+                          {d.name}
+                          {d.content && <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: 8 }}>{expandedDoc === d.id ? "▾" : "▸"}</span>}
+                        </span>
+                        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <span className={`chip ${statusColor[d.status]}`}>
+                            {d.status === "ready" ? "Ready" : "Processing…"}
+                          </span>
+                          {!isDemo && (
+                            <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }} onClick={(e) => { e.stopPropagation(); deleteDoc(d.id); }}>Delete</button>
+                          )}
+                        </span>
+                      </div>
+                      {expandedDoc === d.id && d.content && (
+                        <div style={{ background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: "12px 14px", margin: "4px 0 12px", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "var(--ink)", maxHeight: 300, overflow: "auto" }}>
+                          {d.content}
+                        </div>
+                      )}
                     </div>
                   ))}
                   <div style={{ height: 18 }} />
