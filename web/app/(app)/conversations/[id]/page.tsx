@@ -87,8 +87,7 @@ export default function Conversation() {
         const { data: convos } = await supabase
           .from("conversations")
           .select("id, status, channel")
-          .eq("lead_id", id)
-          .order("created_at", { ascending: false });
+          .eq("lead_id", id);
 
         if (convos && convos.length > 0) {
           // Prefer whatsapp conversation, fall back to first
