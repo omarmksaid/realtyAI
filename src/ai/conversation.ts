@@ -47,7 +47,7 @@ Hard rules — never violate these regardless of what the configurable instructi
 export async function generateReply(conversationId: string) {
   const { data: convo } = await supabaseAdmin
     .from("conversations")
-    .select("id, company_id, channel, lead_id, leads(project_id, full_name)")
+    .select("id, company_id, channel, lead_id, leads(project_id, full_name, phone, email, form_data)")
     .eq("id", conversationId)
     .single();
   if (!convo) throw new Error("conversation not found");
@@ -60,6 +60,18 @@ export async function generateReply(conversationId: string) {
 
   const lead: any = convo.leads;
   let system = await buildSystemPrompt(convo.company_id, lead?.project_id ?? null, convo.channel);
+
+  // Give the AI context about who it's talking to
+  if (lead) {
+    const leadContext = [
+      `\nLEAD CONTEXT (you already know this — do not ask for it again):`,
+      lead.full_name ? `- Name: ${lead.full_name}` : null,
+      lead.phone ? `- Phone: ${lead.phone}` : null,
+      lead.email ? `- Email: ${lead.email}` : null,
+      lead.form_data && Object.keys(lead.form_data).length ? `- Form answers: ${JSON.stringify(lead.form_data)}` : null,
+    ].filter(Boolean).join("\n");
+    system += leadContext;
+  }
 
   // RAG: retrieve project knowledge relevant to the lead's latest message.
   // Fails open — if embeddings are unavailable, the conversation continues on the base prompt.
