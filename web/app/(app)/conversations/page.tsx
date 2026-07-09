@@ -44,36 +44,46 @@ export default function Conversations() {
       const companyId = await getCompanyId();
       if (!companyId) { setSearching(false); return; }
       const supabase = createClient();
-      const { data, error } = await supabase.rpc("search_transcripts", {
-        query: query,
-        company: companyId,
-      });
-      if (error || !data || data.length === 0) {
-        setResults(demoResults);
+
+      // Direct text search on messages using the generated tsvector column
+      const { data, error } = await supabase
+        .from("messages")
+        .select("id, content, direction, role, created_at, conversations!inner(channel, lead_id, leads!inner(full_name, projects(name)))")
+        .eq("company_id", companyId)
+        .textSearch("search", query)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (error) {
+        console.error("Search error:", error);
+        setResults([]);
+        setSearching(false);
+        return;
+      }
+      if (!data || data.length === 0) {
+        setResults([]);
         setSearching(false);
         return;
       }
       setResults(
         data.map((r: any) => ({
-          id: r.lead_id || r.conversation_id || r.id,
-          lead: r.lead_name || r.name || "Unknown",
-          project: r.project_name || "",
-          channel: r.channel || "whatsapp",
+          id: r.conversations?.lead_id || r.id,
+          lead: r.conversations?.leads?.full_name || "Unknown",
+          project: r.conversations?.leads?.projects?.name || "",
+          channel: r.conversations?.channel || "whatsapp",
           role: r.direction === "outbound" ? "ai" : "lead",
-          snippet: highlightSnippet(
-            r.snippet || r.body || r.text || "",
-            query
-          ),
+          snippet: highlightSnippet(r.content || "", query),
           at: r.created_at
             ? new Date(r.created_at).toLocaleString("en-US", {
                 month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
               })
             : "",
-          recording: r.channel === "call",
+          recording: r.conversations?.channel === "call",
         }))
       );
-    } catch {
-      setResults(demoResults);
+    } catch (e) {
+      console.error("Search failed:", e);
+      setResults([]);
     } finally {
       setSearching(false);
     }
