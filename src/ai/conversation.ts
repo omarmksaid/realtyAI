@@ -60,7 +60,15 @@ export async function generateReply(conversationId: string) {
     .order("created_at", { ascending: true });
 
   const lead: any = convo.leads;
+  const { data: company } = await supabaseAdmin
+    .from("companies").select("timezone").eq("id", convo.company_id).single();
+  const tz = company?.timezone ?? "America/Toronto";
   let system = await buildSystemPrompt(convo.company_id, lead?.project_id ?? null, convo.channel);
+
+  // Add current date/time context so the AI can resolve "tomorrow", "next Monday", etc.
+  const { DateTime } = await import("luxon");
+  const now = DateTime.now().setZone(tz);
+  system += `\n\nCURRENT DATE/TIME: ${now.toFormat("cccc, MMMM d, yyyy h:mm a")} (${tz}). Use this to resolve relative dates like "tomorrow" or "next week" when generating [CALLBACK:...] tags.`;
 
   // Give the AI context about who it's talking to
   if (lead) {
