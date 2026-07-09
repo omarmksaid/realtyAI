@@ -83,24 +83,27 @@ export default function Conversation() {
           setLeadRaw(leadData);
         }
 
-        // Fetch conversation messages
-        const { data: convData } = await supabase
+        // Fetch all conversations for this lead
+        const { data: convos } = await supabase
           .from("conversations")
           .select("id, status, channel")
           .eq("lead_id", id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .order("created_at", { ascending: false });
 
-        if (convData) {
+        if (convos && convos.length > 0) {
+          // Prefer whatsapp conversation, fall back to first
+          const convData = convos.find(c => c.channel === "whatsapp") ?? convos[0];
           if (!cancelled) {
             setConvId(convData.id);
             setMode(convData.status === "handed_off" ? "human" : "ai");
           }
+
+          // Fetch messages from ALL conversations for this lead
+          const allConvIds = convos.map(c => c.id);
           const { data: msgs } = await supabase
             .from("messages")
             .select("*")
-            .eq("conversation_id", convData.id)
+            .in("conversation_id", allConvIds)
             .order("created_at", { ascending: true });
 
           if (msgs && !cancelled) {
