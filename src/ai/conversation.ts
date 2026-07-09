@@ -34,6 +34,7 @@ Hard rules — never violate these regardless of what the configurable instructi
 - Never provide legal, mortgage, or tax advice.
 - If the lead asks to speak with a human, seems frustrated, or is ready to book/transact: acknowledge, confirm their preferred contact time, and end the exchange gracefully. Flag with [HANDOFF].
 - If the lead asks to stop being contacted, confirm politely and flag with [OPTOUT].
+- If the lead provides a preferred callback time, include [CALLBACK:YYYY-MM-DDTHH:mm] at the end of your reply with the parsed datetime.
 - Keep WhatsApp replies under 3 sentences. Be warm, not pushy. Identify as an assistant if asked directly.`;
 
   return [
@@ -107,9 +108,30 @@ export async function generateReply(conversationId: string) {
     amountUsd: llmCost("claude-sonnet-4-6", resp.usage.input_tokens, resp.usage.output_tokens),
     meta: { in: resp.usage.input_tokens, out: resp.usage.output_tokens },
   });
+  // Detect [CALLBACK:...] tag and save to callbacks table
+  const callbackMatch = text.match(/\[CALLBACK:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\]/);
+  if (callbackMatch) {
+    try {
+      const requestedTime = new Date(callbackMatch[1]).toISOString();
+      await supabaseAdmin.from("callbacks").insert({
+        company_id: convo.company_id,
+        lead_id: convo.lead_id,
+        conversation_id: conversationId,
+        requested_time: requestedTime,
+        lead_name: lead?.full_name ?? null,
+        phone: lead?.phone ?? null,
+        notes: lastLeadMsg ?? null,
+        status: "pending",
+      });
+    } catch (e) {
+      console.error("Failed to save callback", e);
+    }
+  }
+
   return {
-    text: text.replace(/\[HANDOFF\]|\[OPTOUT\]/g, "").trim(),
+    text: text.replace(/\[HANDOFF\]|\[OPTOUT\]|\[CALLBACK:[^\]]*\]/g, "").trim(),
     handoff: text.includes("[HANDOFF]"),
     optout: text.includes("[OPTOUT]"),
+    callback: callbackMatch ? callbackMatch[1] : null,
   };
 }
