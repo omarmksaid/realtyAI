@@ -75,24 +75,41 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
   await boss.cancel("outreach", `${lead.id}:voice`).catch(() => {});
   await boss.cancel("outreach", `${lead.id}:email`).catch(() => {});
 
-  const { data: convo } = await supabaseAdmin
+  // Find or create the conversation — do NOT overwrite status if it already exists
+  let { data: convo } = await supabaseAdmin
     .from("conversations")
-    .upsert(
-      { company_id: lead.company_id, lead_id: lead.id, channel: "whatsapp", status: "active" },
-      { onConflict: "lead_id,channel" } // add a unique index for this in a follow-up migration
-    )
-    .select().single();
+    .select("*")
+    .eq("lead_id", lead.id)
+    .eq("channel", "whatsapp")
+    .maybeSingle();
+
+  if (!convo) {
+    const { data: newConvo } = await supabaseAdmin
+      .from("conversations")
+      .insert({ company_id: lead.company_id, lead_id: lead.id, channel: "whatsapp", status: "active" })
+      .select().single();
+    convo = newConvo;
+  }
+  if (!convo) { console.error("Failed to find/create conversation"); return twimlOk(); }
 
   await supabaseAdmin.from("messages").insert({
-    company_id: lead.company_id, conversation_id: convo!.id,
+    company_id: lead.company_id, conversation_id: convo.id,
     direction: "inbound", role: "lead", content: text,
     meta: mediaUrls.length ? { media_urls: mediaUrls } : {},
   });
-  await supabaseAdmin.from("leads").update({ status: "engaged" }).eq("id", lead.id);
+  if (lead.status !== "handed_off") {
+    await supabaseAdmin.from("leads").update({ status: "engaged" }).eq("id", lead.id);
+  }
   {
     const { recordCost, RATES } = await import("../../lib/costs");
-    await recordCost({ companyId: lead.company_id, conversationId: convo!.id, leadId: lead.id,
+    await recordCost({ companyId: lead.company_id, conversationId: convo.id, leadId: lead.id,
       category: "whatsapp", amountUsd: RATES.WA_MSG, meta: { kind: "inbound" } });
+  }
+
+  // If conversation is handed off to a human, store the message but don't AI-reply
+  if (convo.status === "handed_off") {
+    console.log("Conversation handed off — storing message, no AI reply");
+    return twimlOk();
   }
 
   // Billing gate: trial expired / cancelled -> store the message, no AI reply.
@@ -101,14 +118,14 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
     .from("companies").select("plan, billing_status, trial_ends_at").eq("id", lead.company_id).single();
   if (!co || !automationActive(co as any)) { console.log("Automation inactive for", lead.company_id); return twimlOk(); }
 
-  console.log("Generating AI reply for conversation", convo!.id);
-  const reply = await generateReply(convo!.id);
+  console.log("Generating AI reply for conversation", convo.id);
+  const reply = await generateReply(convo.id);
 
   if (reply.optout) {
     await supabaseAdmin.from("leads").update({ opted_out: true, status: "opted_out" }).eq("id", lead.id);
   }
   if (reply.handoff) {
-    await supabaseAdmin.from("conversations").update({ status: "handed_off" }).eq("id", convo!.id);
+    await supabaseAdmin.from("conversations").update({ status: "handed_off" }).eq("id", convo.id);
     await supabaseAdmin.from("leads").update({ status: "handed_off" }).eq("id", lead.id);
     const { notifyOnCall } = await import("../team");
     const { data: full } = await supabaseAdmin
@@ -119,12 +136,12 @@ inboundWebhooks.post("/twilio/whatsapp", async (c) => {
 
   const wa = getChannel("whatsapp")!;
   const sent = await wa.send({
-    lead: lead as any, conversationId: convo!.id,
+    lead: lead as any, conversationId: convo.id,
     projectName: "", isFirstTouch: false, body: reply.text,
   });
   console.log("AI reply:", reply.text?.slice(0, 100), "sent:", sent.ok, sent.error ?? "");
   await supabaseAdmin.from("messages").insert({
-    company_id: lead.company_id, conversation_id: convo!.id,
+    company_id: lead.company_id, conversation_id: convo.id,
     direction: "outbound", role: "ai", content: reply.text,
     provider_message_id: sent.providerMessageId,
   });
