@@ -35,7 +35,9 @@ export default function Settings() {
   const [waInput, setWaInput] = useState("");
   const [savingWa, setSavingWa] = useState(false);
   const [buyingNumber, setBuyingNumber] = useState(false);
+  const [searchingNumbers, setSearchingNumbers] = useState(false);
   const [buyAreaCode, setBuyAreaCode] = useState("");
+  const [availableNumbers, setAvailableNumbers] = useState<{ phoneNumber: string; locality: string; region: string }[]>([]);
 
   const fetchTeam = useCallback(async () => {
     if (isDemo) return;
@@ -232,47 +234,85 @@ export default function Settings() {
           The number leads see when the AI or your team messages them on WhatsApp.
         </p>
         {waNumber ? (
-          <div className="doc-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span><b>{waNumber}</b> <span style={{ color: "var(--muted)", fontSize: 13 }}>· active</span></span>
-            <span className="chip chip-ai">Connected</span>
-          </div>
+          <>
+            <div className="doc-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span><b>{waNumber}</b> <span style={{ color: "var(--muted)", fontSize: 13 }}>· active</span></span>
+              <span className="chip chip-ai">Connected</span>
+            </div>
+            <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+              To change your number, contact support. Only one number per workspace is supported.
+            </p>
+          </>
         ) : (
-          <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 12 }}>No WhatsApp number configured. Using platform default.</p>
+          <>
+            <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 12 }}>No WhatsApp number configured. Choose one of the options below.</p>
+
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Option 1: Use an existing number</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input placeholder="Enter number (e.g. +14165551234)" value={waInput} onChange={(e) => setWaInput(e.target.value)} style={{ flex: 1 }} />
+                <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={savingWa || !waInput.trim()} onClick={async () => {
+                  setSavingWa(true);
+                  try {
+                    const res = await apiFetch("/agent/company/whatsapp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ whatsapp_number: waInput.trim() }) });
+                    if (res.ok) setWaNumber(waInput.trim());
+                  } catch {} finally { setSavingWa(false); }
+                }}>{savingWa ? "Saving…" : "Save"}</button>
+              </div>
+            </div>
+
+            <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Option 2: Get a new number (~$1/mo)</p>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <input placeholder="Area code (e.g. 416)" value={buyAreaCode} onChange={(e) => setBuyAreaCode(e.target.value)} style={{ width: 140 }} />
+                <button className="btn" style={{ fontSize: 13 }} disabled={searchingNumbers} onClick={async () => {
+                  setSearchingNumbers(true);
+                  setAvailableNumbers([]);
+                  try {
+                    const res = await apiFetch("/agent/company/search-numbers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ country: "US", area_code: buyAreaCode || undefined }) });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setAvailableNumbers(data.numbers ?? []);
+                      if (!data.numbers?.length) alert("No numbers available in that area. Try a different area code.");
+                    }
+                  } catch {} finally { setSearchingNumbers(false); }
+                }}>{searchingNumbers ? "Searching…" : "Search available numbers"}</button>
+              </div>
+
+              {availableNumbers.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {availableNumbers.map((n) => (
+                    <div key={n.phoneNumber} className="doc-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>
+                        <b>{n.phoneNumber}</b>
+                        <span style={{ color: "var(--muted)", fontSize: 13, marginLeft: 8 }}>{n.locality}{n.region ? `, ${n.region}` : ""}</span>
+                      </span>
+                      <button className="btn btn-primary" style={{ fontSize: 12, padding: "4px 12px" }} disabled={buyingNumber} onClick={async () => {
+                        if (!confirm(`Buy ${n.phoneNumber} for ~$1/month?`)) return;
+                        setBuyingNumber(true);
+                        try {
+                          const res = await apiFetch("/agent/company/buy-number", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone_number: n.phoneNumber }) });
+                          if (res.ok) {
+                            const data = await res.json();
+                            setWaNumber(data.phone_number);
+                            setAvailableNumbers([]);
+                          } else {
+                            const err = await res.json().catch(() => ({}));
+                            alert(err.error || "Failed to buy number");
+                          }
+                        } catch { alert("Failed to buy number"); } finally { setBuyingNumber(false); }
+                      }}>{buyingNumber ? "…" : "Buy this number"}</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+                After purchase, the number needs WhatsApp Business registration with Meta (1-3 day review) before it can send WhatsApp messages. SMS and voice work immediately.
+              </p>
+            </div>
+          </>
         )}
-        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-          <input placeholder="Enter number (e.g. +14165551234)" value={waInput} onChange={(e) => setWaInput(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
-          <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={savingWa || !waInput.trim()} onClick={async () => {
-            setSavingWa(true);
-            try {
-              const res = await apiFetch("/agent/company/whatsapp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ whatsapp_number: waInput.trim() }) });
-              if (res.ok) setWaNumber(waInput.trim());
-            } catch {} finally { setSavingWa(false); }
-          }}>{savingWa ? "Saving…" : "Save number"}</button>
-        </div>
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
-          <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 8px" }}>Or buy a new Twilio number:</p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input placeholder="Area code (e.g. 416)" value={buyAreaCode} onChange={(e) => setBuyAreaCode(e.target.value)} style={{ width: 140 }} />
-            <button className="btn" style={{ fontSize: 13 }} disabled={buyingNumber} onClick={async () => {
-              setBuyingNumber(true);
-              try {
-                const res = await apiFetch("/agent/company/buy-number", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ country: "US", area_code: buyAreaCode || undefined }) });
-                if (res.ok) {
-                  const data = await res.json();
-                  setWaNumber(data.phone_number);
-                  setWaInput(data.phone_number);
-                  alert(`Number purchased: ${data.phone_number}`);
-                } else {
-                  const err = await res.json().catch(() => ({}));
-                  alert(err.error || "Failed to buy number");
-                }
-              } catch { alert("Failed to buy number"); } finally { setBuyingNumber(false); }
-            }}>{buyingNumber ? "Buying…" : "Buy number (~$1/mo)"}</button>
-          </div>
-          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
-            Note: The number needs WhatsApp Business registration (Meta review, 1-3 days) before it can send WhatsApp messages.
-          </p>
-        </div>
       </div>
 
       <div className="card card-pad">

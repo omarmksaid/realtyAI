@@ -123,32 +123,49 @@ agentRoutes.put("/company/whatsapp", async (c) => {
   return c.json({ ok: true });
 });
 
-/** Search and buy a Twilio phone number. Admin only. */
-agentRoutes.post("/company/buy-number", async (c) => {
+/** Search for available Twilio phone numbers. Admin only. */
+agentRoutes.post("/company/search-numbers", async (c) => {
   if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
-  const companyId = c.get("companyId");
   const { country, area_code } = await c.req.json();
   try {
     const twilio = (await import("twilio")).default;
     const tw = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-    // Search for available numbers
     const available = await tw.availablePhoneNumbers(country || "US").local.list({
       areaCode: area_code ? Number(area_code) : undefined,
       smsEnabled: true,
       voiceEnabled: true,
       limit: 5,
     });
-    if (!available.length) return c.json({ error: "No numbers available in that area" }, 404);
-    // Buy the first one
+    return c.json({ numbers: available.map(n => ({ phoneNumber: n.phoneNumber, locality: n.locality, region: n.region })) });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+/** Buy a specific Twilio phone number. Admin only. One per company. */
+agentRoutes.post("/company/buy-number", async (c) => {
+  if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
+  const companyId = c.get("companyId");
+
+  // Check if company already has a number
+  const { data: existing } = await supabaseAdmin.from("companies").select("settings").eq("id", companyId).single();
+  if ((existing?.settings as any)?.whatsapp_number) {
+    return c.json({ error: "This workspace already has a phone number. Only one number per workspace is allowed." }, 400);
+  }
+
+  const { phone_number } = await c.req.json();
+  if (!phone_number) return c.json({ error: "phone_number required" }, 400);
+
+  try {
+    const twilio = (await import("twilio")).default;
+    const tw = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
     const purchased = await tw.incomingPhoneNumbers.create({
-      phoneNumber: available[0].phoneNumber,
+      phoneNumber: phone_number,
       smsUrl: `${env.APP_URL}/webhooks/twilio/whatsapp`,
       statusCallback: `${env.APP_URL}/webhooks/twilio/status`,
     });
-    // Save to company settings
-    const { data: co } = await supabaseAdmin.from("companies").select("settings").eq("id", companyId).single();
     await supabaseAdmin.from("companies")
-      .update({ settings: { ...(co?.settings ?? {}), whatsapp_number: purchased.phoneNumber, twilio_number_sid: purchased.sid } })
+      .update({ settings: { ...(existing?.settings ?? {}), whatsapp_number: purchased.phoneNumber, twilio_number_sid: purchased.sid } })
       .eq("id", companyId);
     await supabaseAdmin.from("audit_log").insert({
       company_id: companyId, user_id: c.get("userId"), action: "number.purchased",
