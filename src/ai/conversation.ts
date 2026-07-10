@@ -146,7 +146,8 @@ export async function generateReply(conversationId: string) {
   const callbackMatch = text.match(/\[CALLBACK:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\]/);
   if (callbackMatch) {
     try {
-      const requestedTime = new Date(callbackMatch[1]).toISOString();
+      // Parse the datetime in the company's timezone, then convert to UTC
+      const requestedTime = DateTime.fromISO(callbackMatch[1], { zone: tz }).toUTC().toISO()!;
       // Cancel any existing pending callbacks for this lead (they changed their mind)
       await supabaseAdmin.from("callbacks")
         .update({ status: "cancelled" })

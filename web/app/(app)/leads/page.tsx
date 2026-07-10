@@ -8,6 +8,22 @@ import { isDemo, demoLeads, type LeadRow, type Score } from "@/lib/data";
 const scoreChip = { hot: "chip-hot", warm: "chip-warm", cold: "chip-cold" } as const;
 const scoreWord = { hot: "Hot", warm: "Warm", cold: "Cold" } as const;
 
+function timeAgo(date: Date): string {
+  const now = Date.now();
+  const diff = now - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
 function mapRow(r: any): LeadRow {
   const score: Score = r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : "cold";
   const lang = r.detected_language || "en";
@@ -18,9 +34,7 @@ function mapRow(r: any): LeadRow {
     fr: "Fran\u00E7ais \u00B7 French",
   };
   const created = r.created_at ? new Date(r.created_at) : null;
-  const receivedAt = created
-    ? created.toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-    : "";
+  const receivedAt = created ? timeAgo(created) : "";
   return {
     id: r.id,
     name: r.full_name || r.name || "Unknown",
@@ -35,6 +49,7 @@ function mapRow(r: any): LeadRow {
     score,
     scoreReason: r.score_reason || "",
     receivedAt,
+    receivedRaw: r.created_at || "",
   };
 }
 
@@ -100,7 +115,7 @@ export default function Leads() {
                 <td style={{ textTransform: "capitalize" }}>{l.status.replace("_", " ")}</td>
                 <td><span className="chip chip-lang">{l.langLabel}</span></td>
                 <td style={{ textTransform: "capitalize", color: "var(--muted)" }}>{l.source}</td>
-                <td style={{ color: "var(--muted)" }}>{l.receivedAt}</td>
+                <td style={{ color: "var(--muted)" }} title={l.receivedRaw ? new Date(l.receivedRaw).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : ""}>{l.receivedAt}</td>
               </tr>
             ))}
           </tbody>

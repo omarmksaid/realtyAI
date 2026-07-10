@@ -7,7 +7,7 @@ export type Score = "hot" | "warm" | "cold";
 export interface LeadRow {
   id: string; name: string; phone?: string; email?: string; project: string; source: "meta" | "google";
   status: string; channel: string; language: string; langLabel: string;
-  score: Score; scoreReason: string; receivedAt: string;
+  score: Score; scoreReason: string; receivedAt: string; receivedRaw?: string;
 }
 
 export interface Turn {
