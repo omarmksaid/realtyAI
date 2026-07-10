@@ -60,6 +60,7 @@ export default function Coverage() {
   const [grid, setGrid] = useState<boolean[][]>(defaultGrid);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadingCal, setLoadingCal] = useState(!isDemo);
   const paintTo = useRef<boolean | null>(null);
 
   // Load existing schedule from DB
@@ -77,7 +78,9 @@ export default function Coverage() {
           .single();
         const bh = (data?.settings as any)?.business_hours;
         if (bh) setGrid(scheduleToGrid(bh));
-      } catch {}
+      } catch {} finally {
+        setLoadingCal(false);
+      }
     })();
   }, []);
 
@@ -107,6 +110,16 @@ export default function Coverage() {
   }
 
   const staffedHrs = grid.flat().filter(Boolean).length;
+
+  if (loadingCal) {
+    return (
+      <div className="card card-pad" style={{ textAlign: "center", color: "var(--muted)", padding: "40px 22px" }}>
+        <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite", display: "inline-block" }}>⟳</div>
+        <p>Loading coverage calendar...</p>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   return (
     <div className="card card-pad" onMouseUp={() => (paintTo.current = null)} onMouseLeave={() => (paintTo.current = null)}>

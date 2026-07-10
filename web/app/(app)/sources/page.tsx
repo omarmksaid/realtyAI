@@ -231,6 +231,18 @@ export default function Sources() {
 
   const unmappedNow = forms.filter((f) => !f.project).length;
 
+  if (loading) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "60vh", color: "var(--muted)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+          <p>Loading sources...</p>
+          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <h1 className="page-title">Sources</h1>

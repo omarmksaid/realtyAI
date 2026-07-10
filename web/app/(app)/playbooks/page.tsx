@@ -201,6 +201,18 @@ export default function Playbooks() {
 Answer questions using PROJECT KNOWLEDGE only. Always offer to book a morning call with the team and collect their preferred time.
 Reply in the lead's language.`;
 
+  if (loading) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "60vh", color: "var(--muted)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 24, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+          <p>Loading playbooks...</p>
+          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <h1 className="page-title">Playbooks</h1>
