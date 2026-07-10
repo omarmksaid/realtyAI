@@ -19,7 +19,7 @@ const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 const tools: Anthropic.Tool[] = [
   {
     name: "search_leads",
-    description: "Search this company's leads. Dates are interpreted in the company's timezone. Returns name, project, status, score, language, channel, and received time.",
+    description: "Search this company's leads. Dates are interpreted in the company's timezone. Returns name, project, status, score, language, channel, and received time. NOTE: score may be null for leads not yet scored — use status (engaged, handed_off, qualified) as a proxy for interest level when score is unavailable.",
     input_schema: {
       type: "object",
       properties: {
@@ -146,7 +146,16 @@ async function execTool(companyId: string, tz: string, name: string, input: any)
       .order("created_at", { ascending: false })
       .limit(Math.min(input.limit ?? 50, 200));
     if (input.status) q = q.eq("status", input.status);
-    if (input.score) q = q.eq("score", input.score);
+    if (input.score) {
+      // Include both scored leads and unscored engaged leads for hot/warm queries
+      if (input.score === "hot") {
+        q = q.or(`score.eq.hot,status.in.(engaged,handed_off,qualified)`);
+      } else if (input.score === "warm") {
+        q = q.or(`score.eq.warm,score.eq.hot,status.in.(engaged,handed_off,qualified)`);
+      } else {
+        q = q.eq("score", input.score);
+      }
+    }
     if (input.source) q = q.eq("provider", input.source);
     const { data, error } = await q;
     if (error) return `Error: ${error.message}`;
