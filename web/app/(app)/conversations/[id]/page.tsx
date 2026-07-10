@@ -296,7 +296,7 @@ export default function Conversation() {
             <div className="composer">
               <input
                 value={draft}
-                placeholder={`Message ${lead.name.split(" ")[0]} — sends from your WhatsApp number`}
+                placeholder={`Message ${lead.name.split(" ")[0]} — sends from the brokerage's WhatsApp number`}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && send()}
               />
