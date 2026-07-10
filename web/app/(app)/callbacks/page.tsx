@@ -78,6 +78,7 @@ export default function Callbacks() {
           .from("callbacks")
           .select("*, leads(projects(name))")
           .eq("company_id", companyId)
+          .neq("status", "cancelled")
           .gte("requested_time", from)
           .lt("requested_time", to)
           .order("requested_time", { ascending: true });
