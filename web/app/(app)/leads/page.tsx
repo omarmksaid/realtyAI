@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { getCompanyId } from "@/lib/api";
@@ -7,6 +7,11 @@ import { isDemo, demoLeads, type LeadRow, type Score } from "@/lib/data";
 
 const scoreChip = { hot: "chip-hot", warm: "chip-warm", cold: "chip-cold" } as const;
 const scoreWord = { hot: "Hot", warm: "Warm", cold: "Cold" } as const;
+
+const PAGE_SIZE = 20;
+
+type SortKey = "name" | "project" | "score" | "status" | "source" | "receivedRaw";
+type SortDir = "asc" | "desc";
 
 function timeAgo(date: Date): string {
   const now = Date.now();
@@ -57,6 +62,10 @@ export default function Leads() {
   const router = useRouter();
   const [leads, setLeads] = useState<LeadRow[]>(isDemo ? demoLeads : []);
   const [loading, setLoading] = useState(!isDemo);
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("receivedRaw");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     if (isDemo) return;
@@ -71,7 +80,7 @@ export default function Leads() {
           .select("*, projects(name)")
           .eq("company_id", companyId)
           .order("created_at", { ascending: false })
-          .limit(50);
+          .limit(200);
         if (error || !data) { setLoading(false); return; }
         if (!cancelled) setLeads(data.map(mapRow));
       } catch {
@@ -83,24 +92,143 @@ export default function Leads() {
     return () => { cancelled = true; };
   }, []);
 
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+    setPage(1);
+  };
+
+  const sortIndicator = (key: SortKey) =>
+    sortKey === key ? (sortDir === "asc" ? " \u25B2" : " \u25BC") : "";
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return leads;
+    return leads.filter((l) => l.name.toLowerCase().includes(q));
+  }, [leads, search]);
+
+  const sorted = useMemo(() => {
+    const scoreOrder: Record<Score, number> = { hot: 3, warm: 2, cold: 1 };
+    return [...filtered].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "name":
+          cmp = a.name.localeCompare(b.name);
+          break;
+        case "project":
+          cmp = a.project.localeCompare(b.project);
+          break;
+        case "score":
+          cmp = scoreOrder[a.score] - scoreOrder[b.score];
+          break;
+        case "status":
+          cmp = a.status.localeCompare(b.status);
+          break;
+        case "source":
+          cmp = a.source.localeCompare(b.source);
+          break;
+        case "receivedRaw":
+          cmp = (a.receivedRaw || "").localeCompare(b.receivedRaw || "");
+          break;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [filtered, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageLeads = sorted.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  // Reset to page 1 when search changes
+  useEffect(() => { setPage(1); }, [search]);
+
+  const thStyle: React.CSSProperties = { cursor: "pointer", userSelect: "none" };
+
   return (
     <>
       <h1 className="page-title">Leads</h1>
       <p className="page-sub">Everything that came in, business hours and after.</p>
+
+      {/* Search + Pagination controls */}
+      {!loading && leads.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
+          <input
+            type="text"
+            placeholder="Search by name..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              padding: "7px 12px",
+              border: "1px solid var(--border, #ddd)",
+              borderRadius: 6,
+              fontSize: 14,
+              width: 240,
+              background: "var(--surface, #fff)",
+              color: "var(--fg, #222)",
+            }}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--muted)" }}>
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              style={{
+                padding: "4px 10px",
+                border: "1px solid var(--border, #ddd)",
+                borderRadius: 5,
+                background: "var(--surface, #fff)",
+                cursor: safePage <= 1 ? "default" : "pointer",
+                opacity: safePage <= 1 ? 0.4 : 1,
+                fontSize: 14,
+              }}
+            >
+              &larr;
+            </button>
+            <span>Page {safePage} of {totalPages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              style={{
+                padding: "4px 10px",
+                border: "1px solid var(--border, #ddd)",
+                borderRadius: 5,
+                background: "var(--surface, #fff)",
+                cursor: safePage >= totalPages ? "default" : "pointer",
+                opacity: safePage >= totalPages ? 0.4 : 1,
+                fontSize: 14,
+              }}
+            >
+              &rarr;
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         {loading ? (
           <p style={{ padding: "24px 22px", color: "var(--muted)" }}>Loading leads...</p>
         ) : leads.length === 0 ? (
           <p style={{ padding: "24px 22px", color: "var(--muted)" }}>No leads yet. They&apos;ll appear here as they come in from your ad campaigns.</p>
+        ) : sorted.length === 0 ? (
+          <p style={{ padding: "24px 22px", color: "var(--muted)" }}>No leads match &ldquo;{search}&rdquo;.</p>
         ) : (
         <table>
           <thead>
             <tr>
-              <th>Lead</th><th>Project</th><th>Score</th><th>Status</th><th>Language</th><th>Source</th><th>Received</th>
+              <th style={thStyle} onClick={() => toggleSort("name")}>Lead{sortIndicator("name")}</th>
+              <th style={thStyle} onClick={() => toggleSort("project")}>Project{sortIndicator("project")}</th>
+              <th style={thStyle} onClick={() => toggleSort("score")}>Score{sortIndicator("score")}</th>
+              <th style={thStyle} onClick={() => toggleSort("status")}>Status{sortIndicator("status")}</th>
+              <th>Language</th>
+              <th style={thStyle} onClick={() => toggleSort("source")}>Source{sortIndicator("source")}</th>
+              <th style={thStyle} onClick={() => toggleSort("receivedRaw")}>Received{sortIndicator("receivedRaw")}</th>
             </tr>
           </thead>
           <tbody>
-            {leads.map((l) => (
+            {pageLeads.map((l) => (
               <tr key={l.id} className="rowlink" onClick={() => router.push(`/conversations/${l.id}`)} style={{ cursor: "pointer" }}>
                 <td>
                   <b>{l.name}</b>
