@@ -21,7 +21,17 @@ export const whatsappAdapter: ChannelAdapter = {
   async send(ctx: OutboundContext): Promise<SendResult> {
     try {
       const to = `whatsapp:${ctx.lead.phone}`;
-      const from = `whatsapp:${env.TWILIO_WHATSAPP_NUMBER}`;
+      // Use per-company WhatsApp number if configured, fall back to platform default
+      let whatsappNumber = env.TWILIO_WHATSAPP_NUMBER;
+      if (ctx.lead.company_id) {
+        const { supabaseAdmin } = await import("../lib/supabase");
+        const { data: co } = await supabaseAdmin
+          .from("companies").select("settings")
+          .eq("id", ctx.lead.company_id).single();
+        const companyNumber = (co?.settings as any)?.whatsapp_number;
+        if (companyNumber) whatsappNumber = companyNumber;
+      }
+      const from = `whatsapp:${whatsappNumber}`;
       const statusCallback = `${env.APP_URL}/webhooks/twilio/status`; // sent/delivered/read receipts
 
       // 24h session rule: free-form is only allowed within 24h of the lead's last

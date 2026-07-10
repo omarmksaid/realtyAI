@@ -109,6 +109,57 @@ agentRoutes.get("/search", async (c) => {
   return c.json({ results: data ?? [] });
 });
 
+/** Save company WhatsApp number. Admin only. */
+agentRoutes.put("/company/whatsapp", async (c) => {
+  if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
+  const companyId = c.get("companyId");
+  const { whatsapp_number } = await c.req.json();
+  const { data: co } = await supabaseAdmin.from("companies").select("settings").eq("id", companyId).single();
+  await supabaseAdmin.from("companies")
+    .update({ settings: { ...(co?.settings ?? {}), whatsapp_number } }).eq("id", companyId);
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"), action: "whatsapp.updated", detail: { whatsapp_number },
+  });
+  return c.json({ ok: true });
+});
+
+/** Search and buy a Twilio phone number. Admin only. */
+agentRoutes.post("/company/buy-number", async (c) => {
+  if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
+  const companyId = c.get("companyId");
+  const { country, area_code } = await c.req.json();
+  try {
+    const twilio = (await import("twilio")).default;
+    const tw = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+    // Search for available numbers
+    const available = await tw.availablePhoneNumbers(country || "US").local.list({
+      areaCode: area_code ? Number(area_code) : undefined,
+      smsEnabled: true,
+      voiceEnabled: true,
+      limit: 5,
+    });
+    if (!available.length) return c.json({ error: "No numbers available in that area" }, 404);
+    // Buy the first one
+    const purchased = await tw.incomingPhoneNumbers.create({
+      phoneNumber: available[0].phoneNumber,
+      smsUrl: `${env.APP_URL}/webhooks/twilio/whatsapp`,
+      statusCallback: `${env.APP_URL}/webhooks/twilio/status`,
+    });
+    // Save to company settings
+    const { data: co } = await supabaseAdmin.from("companies").select("settings").eq("id", companyId).single();
+    await supabaseAdmin.from("companies")
+      .update({ settings: { ...(co?.settings ?? {}), whatsapp_number: purchased.phoneNumber, twilio_number_sid: purchased.sid } })
+      .eq("id", companyId);
+    await supabaseAdmin.from("audit_log").insert({
+      company_id: companyId, user_id: c.get("userId"), action: "number.purchased",
+      detail: { phone_number: purchased.phoneNumber, sid: purchased.sid },
+    });
+    return c.json({ ok: true, phone_number: purchased.phoneNumber });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 /** Coverage calendar: replace the company's staffed-hours schedule. Admin only. */
 agentRoutes.put("/company/hours", async (c) => {
   if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
