@@ -260,8 +260,8 @@ export default function Conversation() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="takeover-bar">
+      <div className="card" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 340px)", minHeight: 400 }}>
+        <div className="takeover-bar" style={{ flexShrink: 0 }}>
           {mode === "ai" ? (
             <>
               <span><span className="chip chip-ai">AI is handling this conversation</span></span>
@@ -275,7 +275,7 @@ export default function Conversation() {
           )}
         </div>
 
-        <div className="thread">
+        <div className="thread" style={{ flex: 1, overflowY: "auto" }}>
           {turns.map((t) =>
             t.role === "system" ? (
               <div key={t.id} className="sysline">{t.text}</div>
@@ -291,23 +291,24 @@ export default function Conversation() {
           )}
         </div>
 
-        {mode === "human" && (
-          <div className="composer">
-            <input
-              value={draft}
-              placeholder={`Message ${lead.name.split(" ")[0]} — sends from your WhatsApp number`}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-            />
-            <button className="btn btn-primary" onClick={send}>Send</button>
-          </div>
-        )}
+        <div style={{ flexShrink: 0, borderTop: "1px solid var(--line)" }}>
+          {mode === "human" ? (
+            <div className="composer">
+              <input
+                value={draft}
+                placeholder={`Message ${lead.name.split(" ")[0]} — sends from your WhatsApp number`}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && send()}
+              />
+              <button className="btn btn-primary" onClick={send}>Send</button>
+            </div>
+          ) : (
+            <div style={{ padding: "10px 16px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
+              Take over to reply manually. The AI handles responses automatically.
+            </div>
+          )}
+        </div>
       </div>
-
-      <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 12 }}>
-        Foreign-language messages show an English gloss so anyone on the team can triage.
-        The AI always replies in the lead's language.
-      </p>
     </>
   );
 }
