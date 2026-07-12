@@ -111,6 +111,30 @@ teamRoutes.patch("/members/:userId", async (c) => {
 
 /* ============ Public accept (JWT-verified, but no membership yet — that's the point) ============ */
 
+/** Resolve an invite token to the email it was issued to, so the join page can pin the
+ *  email field instead of letting someone type a different address. Public by necessity —
+ *  the caller has no session yet — but it reveals nothing the holder of the token doesn't
+ *  already have, and it does NOT grant anything. Authorization still happens in
+ *  acceptInvite, which re-checks the email against a verified JWT. */
+export async function lookupInvite(c: any) {
+  const token = c.req.query("token");
+  if (!token) return c.json({ error: "Missing invite token." }, 400);
+
+  const { data: invites } = await supabaseAdmin
+    .from("invites").select("email, company_id")
+    .eq("token", token).is("accepted_at", null)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false }).limit(1);
+  const invite = invites?.[0];
+  if (!invite) {
+    return c.json({ error: "This invite link has expired or already been used." }, 404);
+  }
+
+  const { data: co } = await supabaseAdmin
+    .from("companies").select("name").eq("id", invite.company_id).single();
+  return c.json({ email: invite.email, company: co?.name ?? null });
+}
+
 export async function acceptInvite(c: any) {
   const header = c.req.header("authorization") ?? "";
   const jwt = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -142,9 +166,20 @@ export async function acceptInvite(c: any) {
     return c.json({ error: "This invite link has expired or already been used. Ask for a new one." }, 400);
   }
 
+  // THE INVITE IS BOUND TO AN EMAIL. Without this the token alone is the credential:
+  // forward the email, or leak the link from a shared inbox, and whoever holds it signs up
+  // as anyone and lands inside the brokerage's workspace. It also recorded the wrong email
+  // on the membership, so the audit trail lied about who joined.
+  const norm = (e: string) => e.trim().toLowerCase();
+  if (!userEmail || norm(userEmail) !== norm(invite.email)) {
+    return c.json({
+      error: `This invite was sent to ${invite.email}. Sign in with that email address to accept it.`,
+    }, 403);
+  }
+
   await supabaseAdmin.from("memberships").upsert({
     user_id: userId, company_id: invite.company_id, role: invite.role,
-    email: userEmail || invite.email, phone: phone ?? null, on_call: !!on_call && !!phone,
+    email: userEmail, phone: phone ?? null, on_call: !!on_call && !!phone,
   });
   await supabaseAdmin.from("invites").update({ accepted_at: new Date().toISOString() }).eq("id", invite.id);
   return c.json({ ok: true, companyId: invite.company_id });

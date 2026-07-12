@@ -26,7 +26,8 @@ import { adminRoutes } from "./routes/admin";
 app.use("/admin/*", requirePlatformAdmin);
 app.route("/admin", adminRoutes);  // platform operator: all companies, usage, billing
 
-import { teamRoutes, acceptInvite } from "./routes/team";
+import { teamRoutes, acceptInvite, lookupInvite } from "./routes/team";
+app.get("/team/invite", lookupInvite);    // public: token -> the email it was issued to
 app.post("/team/accept", acceptInvite);   // JWT-verified but pre-membership
 app.use("/team/*", requireAuth);
 app.route("/team", teamRoutes);

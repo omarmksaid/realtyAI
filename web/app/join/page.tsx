@@ -1,8 +1,8 @@
 "use client";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, apiCall } from "@/lib/api";
 
 function JoinForm() {
   const [onCall, setOnCall] = useState(true);
@@ -11,10 +11,32 @@ function JoinForm() {
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [company, setCompany] = useState<string | null>(null);
+  const [inviteLoaded, setInviteLoaded] = useState(false);
 
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get("token") ?? "";
+
+  // An invite is bound to an email. Resolve it and lock the field so nobody signs up under
+  // a different address than the one invited. The API re-checks this against the verified
+  // JWT regardless — pinning it here just stops the mistake from happening.
+  useEffect(() => {
+    if (!token) { setInviteLoaded(true); return; }
+    (async () => {
+      try {
+        const inv = await apiCall<{ email: string; company: string | null }>(
+          `/team/invite?token=${encodeURIComponent(token)}`
+        );
+        setEmail(inv.email);
+        setCompany(inv.company);
+      } catch (e: any) {
+        setError(e?.message ?? "This invite link is no longer valid.");
+      } finally {
+        setInviteLoaded(true);
+      }
+    })();
+  }, [token]);
 
   async function handleSubmit() {
     setError("");
@@ -60,9 +82,25 @@ function JoinForm() {
   return (
     <div style={{ maxWidth: 420, margin: "8vh auto" }}>
       <h1 className="page-title">Join your team</h1>
-      <p className="page-sub">You&apos;ve been invited to a realtyAI workspace.</p>
+      <p className="page-sub">
+        {company
+          ? <>You&apos;ve been invited to <b>{company}</b> on realtyAI.</>
+          : <>You&apos;ve been invited to a realtyAI workspace.</>}
+      </p>
       <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <input type="email" placeholder="Work email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <div>
+          <input
+            type="email"
+            value={email}
+            readOnly
+            disabled
+            placeholder={inviteLoaded ? "" : "Loading invite…"}
+            style={{ width: "100%", background: "var(--bg)", color: "var(--muted)" }}
+          />
+          <p style={{ fontSize: 12.5, color: "var(--muted)", margin: "6px 0 0" }}>
+            This invite is for this address. Ask for a new one to use a different email.
+          </p>
+        </div>
         <input type="password" placeholder="Create a password" value={password} onChange={(e) => setPassword(e.target.value)} />
         <div>
           <input type="tel" placeholder="Mobile number, e.g. +1 647 555 0102" style={{ width: "100%" }} value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -75,7 +113,7 @@ function JoinForm() {
           Text me when a lead asks for a person
         </label>
         {error && <p style={{ color: "#c2703d", fontSize: 13, margin: 0 }}>{error}</p>}
-        <button className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
+        <button className="btn btn-primary" onClick={handleSubmit} disabled={loading || !inviteLoaded || !email}>
           {loading ? "Creating account…" : "Create account & join"}
         </button>
       </div>
