@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase";
 import { getCompanyId } from "@/lib/api";
 import { Nav } from "./nav";
 import TrialBanner from "./trial-banner";
+import { ToastProvider } from "@/lib/toast";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -50,6 +51,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (!ready) return null;
 
   return (
+    <ToastProvider>
     <div className="shell">
       <aside className="sidebar">
         <Link href="/today" className="brand">realty<em>AI</em></Link>
@@ -66,5 +68,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
       <main className="main"><TrialBanner />{children}</main>
     </div>
+    </ToastProvider>
   );
 }

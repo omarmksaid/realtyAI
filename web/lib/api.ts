@@ -59,3 +59,52 @@ export async function apiFetch(
     headers,
   });
 }
+
+/** An API call that failed. Carries the status so callers can special-case 401/403. */
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/**
+ * apiFetch that THROWS on a non-2xx instead of handing back a Response the caller has to
+ * remember to check. The plain `apiFetch` made the failure path opt-in — `if (res.ok)` with
+ * no else was written six separate times, and several call sites updated the UI as though
+ * the write had succeeded. Prefer this everywhere; it makes ignoring an error take effort.
+ *
+ * Returns the parsed JSON body (or undefined for an empty response).
+ */
+export async function apiCall<T = any>(path: string, options?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await apiFetch(path, options);
+  } catch {
+    // Network-level failure: offline, DNS, CORS, backend down.
+    throw new ApiError(0, "Couldn't reach the server. Check your connection and try again.");
+  }
+
+  if (!res.ok) {
+    // Prefer the API's own message ({ error: "..." }) over a bare status code.
+    let detail = "";
+    try {
+      const body = await res.clone().json();
+      detail = body?.error || body?.message || "";
+    } catch {
+      detail = (await res.text().catch(() => "")).slice(0, 200);
+    }
+    const fallback =
+      res.status === 401 || res.status === 403
+        ? "You don't have permission to do that. Try signing in again."
+        : res.status === 413
+          ? "That file is too large."
+          : res.status >= 500
+            ? "Something went wrong on our side. Please try again."
+            : "That didn't work. Please try again.";
+    throw new ApiError(res.status, detail || fallback);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return (await res.json().catch(() => undefined)) as T;
+}

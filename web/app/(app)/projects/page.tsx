@@ -2,7 +2,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { demoProjects, isDemo } from "@/lib/data";
 import { createClient } from "@/lib/supabase";
-import { apiFetch, getCompanyId } from "@/lib/api";
+import { apiFetch, apiCall, getCompanyId } from "@/lib/api";
+import { useToast } from "@/lib/toast";
 
 interface Doc { id: string; name: string; source: string; status: string; content?: string }
 interface Project {
@@ -32,6 +33,7 @@ export default function Projects() {
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const [openingDoc, setOpeningDoc] = useState<string | null>(null);
   const [retryingDoc, setRetryingDoc] = useState<string | null>(null);
+  const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -116,14 +118,14 @@ export default function Projects() {
       // rejected request discarded the user's text with no error and no clue why.
       if (!res.ok) {
         console.error("Failed to add knowledge:", res.status, await res.text());
-        alert("Couldn't save that knowledge source. Your text is still in the box — please try again.");
+        toast.show("Couldn't save that knowledge source. Your text is still in the box — please try again.");
         return; // keep pasteText so the user doesn't lose what they typed
       }
       setPasteText("");
       fetchProjects();
     } catch (e) {
       console.error("Failed to add knowledge", e);
-      alert("Couldn't save that knowledge source. Your text is still in the box — please try again.");
+      toast.show("Couldn't save that knowledge source. Your text is still in the box — please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -134,12 +136,12 @@ export default function Projects() {
    *  is what produced the 400. The API writes it with the service-role key. */
   async function handleFileUpload(projectId: string, files: FileList | null) {
     if (!files || files.length === 0) return;
-    if (isDemo) { alert("File upload requires Supabase connection"); return; }
+    if (isDemo) { toast.show("File upload requires a Supabase connection."); return; }
     // Check size client-side too — no point pushing 40MB up the wire just to be rejected.
     // The API enforces the same limit; this is only for fast feedback.
     const tooBig = Array.from(files).filter((f) => f.size > MAX_UPLOAD_BYTES);
     if (tooBig.length) {
-      alert(
+      toast.show(
         `${tooBig.map((f) => `${f.name} (${(f.size / 1e6).toFixed(1)}MB)`).join(", ")} — ` +
         `over the ${MAX_UPLOAD_MB}MB limit. Split the file or export a smaller version.`
       );
@@ -148,25 +150,22 @@ export default function Projects() {
     }
 
     setUploading(true);
-    const failed: string[] = [];
     try {
       for (const file of Array.from(files)) {
         const body = new FormData();
         body.append("file", file);
-        const res = await apiFetch(`/agent/projects/${projectId}/knowledge/upload`, {
-          method: "POST",
-          body,
-        });
-        if (!res.ok) {
-          console.error("Upload failed:", file.name, res.status, await res.text());
-          failed.push(file.name);
+        try {
+          await apiCall(`/agent/projects/${projectId}/knowledge/upload`, { method: "POST", body });
+        } catch (e: any) {
+          // Surface the API's own reason (too large, unsupported type) per file, rather
+          // than one generic "couldn't upload" for the whole batch.
+          toast.show(`${file.name}: ${e?.message ?? "upload failed"}`);
         }
       }
       await fetchProjects();
-      if (failed.length) alert(`Couldn't upload: ${failed.join(", ")}. Please try again.`);
     } catch (e) {
       console.error("Failed to upload files", e);
-      alert("Couldn't upload those files. Please try again.");
+      toast.show("Couldn't upload those files. Please try again.");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -184,13 +183,13 @@ export default function Projects() {
       });
       if (!res.ok) {
         console.error("Retry failed:", res.status, await res.text());
-        alert("Couldn't retry that document. Please try again.");
+        toast.show("Couldn't retry that document. Please try again.");
         return;
       }
       await fetchProjects();
     } catch (e) {
       console.error("Retry failed", e);
-      alert("Couldn't retry that document. Please try again.");
+      toast.show("Couldn't retry that document. Please try again.");
     } finally {
       setRetryingDoc(null);
     }
@@ -205,14 +204,14 @@ export default function Projects() {
       const res = await apiFetch(`/agent/projects/${projectId}/knowledge/${docId}/url`);
       if (!res.ok) {
         console.error("Failed to get file url:", res.status, await res.text());
-        alert("Couldn't open that file.");
+        toast.show("Couldn't open that file.");
         return;
       }
       const { url } = await res.json();
       window.open(url, "_blank", "noopener");
     } catch (e) {
       console.error("Failed to open file", e);
-      alert("Couldn't open that file.");
+      toast.show("Couldn't open that file.");
     } finally {
       setOpeningDoc(null);
     }
@@ -232,13 +231,13 @@ export default function Projects() {
       if (!res.ok) {
         const body = await res.text();
         console.error("Failed to delete document:", res.status, body);
-        alert("Couldn't delete that knowledge source. Please try again.");
+        toast.show("Couldn't delete that knowledge source. Please try again.");
         return;
       }
       await fetchProjects();
     } catch (e) {
       console.error("Failed to delete document:", e);
-      alert("Couldn't delete that knowledge source. Please try again.");
+      toast.show("Couldn't delete that knowledge source. Please try again.");
     } finally {
       setDeletingDoc(null);
     }

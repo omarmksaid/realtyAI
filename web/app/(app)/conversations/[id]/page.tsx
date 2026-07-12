@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
-import { getCompanyId, apiFetch } from "@/lib/api";
+import { getCompanyId, apiFetch, apiCall } from "@/lib/api";
+import { useToast } from "@/lib/toast";
 import { isDemo, demoConversation, type LeadRow, type Turn, type Score } from "@/lib/data";
 
 const langLabels: Record<string, string> = {
@@ -99,6 +100,8 @@ export default function Conversation() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [convChannels, setConvChannels] = useState<Record<string, string>>({});
   const [callback, setCallback] = useState<{ requested_time: string } | null>(null);
+  const [sending, setSending] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     if (isDemo) return;
@@ -213,13 +216,19 @@ export default function Conversation() {
     };
   }, [convId, convChannels]);
 
+  // These three used to update the UI even when the API call failed ("proceed with local
+  // state update even if API fails"). The dashboard would show you as having taken over a
+  // conversation the AI was still driving, or show a message in the thread that was never
+  // delivered to the lead. They now only reflect state the server actually accepted.
+
   async function takeOver() {
     if (!isDemo) {
       if (!convId) return;
       try {
-        await apiFetch(`/agent/conversations/${convId}/takeover`, { method: "POST" });
-      } catch {
-        // proceed with local state update even if API fails
+        await apiCall(`/agent/conversations/${convId}/takeover`, { method: "POST" });
+      } catch (e: any) {
+        toast.show(e?.message ?? "Couldn't take over this conversation.");
+        return; // the AI is still handling it \u2014 don't pretend otherwise
       }
     }
     setMode("human");
@@ -233,9 +242,10 @@ export default function Conversation() {
     if (!isDemo) {
       if (!convId) return;
       try {
-        await apiFetch(`/agent/conversations/${convId}/handback`, { method: "POST" });
-      } catch {
-        // proceed with local state update
+        await apiCall(`/agent/conversations/${convId}/handback`, { method: "POST" });
+      } catch (e: any) {
+        toast.show(e?.message ?? "Couldn't hand back to the AI.");
+        return;
       }
     }
     setMode("ai");
@@ -247,13 +257,19 @@ export default function Conversation() {
     const text = draft.trim();
     if (!isDemo) {
       if (!convId) return;
+      setSending(true);
       try {
-        await apiFetch("/agent/messages", {
+        await apiCall("/agent/messages", {
           method: "POST",
           body: JSON.stringify({ conversation_id: convId, text }),
         });
-      } catch {
-        // still show the message locally
+      } catch (e: any) {
+        // Never leave a message in the thread that the lead didn't receive. Keep the draft
+        // so the agent can retry rather than retyping it.
+        toast.show(e?.message ?? "Message not sent. It hasn't reached the lead \u2014 try again.");
+        return;
+      } finally {
+        setSending(false);
       }
     }
     setTurns((t) => [...t, { id: `a-${Date.now()}`, role: "agent", text, at: "now" }]);
@@ -412,7 +428,7 @@ export default function Conversation() {
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && send()}
               />
-              <button className="btn btn-primary" onClick={send}>Send</button>
+              <button className="btn btn-primary" onClick={send} disabled={sending}>{sending ? "Sending…" : "Send"}</button>
             </div>
           ) : (
             <div style={{ padding: "10px 16px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
