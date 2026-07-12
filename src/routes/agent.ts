@@ -18,6 +18,12 @@ const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1_000_000;
 /** What extractText() in the ingest worker actually knows how to read. */
 const ACCEPTED_UPLOAD = /\.(pdf|docx|png|jpe?g|webp|txt|md|csv)$/i;
 
+/** Brokerage configuration — routing, prompts, knowledge, numbers, hours, voice — is
+ *  owner/admin only. Agents work leads; they don't reconfigure the workspace. */
+const adminOnly = (c: any) =>
+  c.get("role") === "agent" ? c.json({ error: "Only owners and admins can change this." }, 403) : null;
+
+
 /* Take over: AI stops replying the moment this flips. The inbound webhook
    checks conversation.status — if 'handed_off', it stores the lead's message
    and notifies the agent instead of calling generateReply(). */
@@ -200,11 +206,95 @@ agentRoutes.put("/company/hours", async (c) => {
   return c.json({ ok: true });
 });
 
+/* ============ Routing rules & prompts — owner/admin only ============
+   These were being written straight from the browser to Supabase, which bypassed every
+   role check: RLS only asks "are you a member of this company", never "are you an admin".
+   So any agent could rewrite the AI's system prompt or change the escalation ladder that
+   decides when we spend money on a voice call. They go through the API now. */
+
+/** Create or update a routing rule. */
+agentRoutes.put("/company/routing-rules/:id?", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
+  const companyId = c.get("companyId");
+  const id = c.req.param("id");
+  const { label, day_type, start_time, end_time, channels, followup_delay_min, priority } =
+    await c.req.json();
+
+  if (!label?.trim()) return c.json({ error: "A rule needs a label." }, 400);
+  if (!Array.isArray(channels) || !channels.length) {
+    return c.json({ error: "A rule needs at least one channel." }, 400);
+  }
+
+  const fields = {
+    label: label.trim(), day_type, start_time, end_time, channels,
+    followup_delay_min: Number(followup_delay_min) || 0,
+  };
+
+  const { error } = id
+    ? await supabaseAdmin.from("routing_rules").update(fields)
+        .eq("id", id).eq("company_id", companyId)   // scope: supabaseAdmin bypasses RLS
+    : await supabaseAdmin.from("routing_rules").insert({
+        ...fields, company_id: companyId, priority: Number(priority) || 10,
+      });
+  if (error) return c.json({ error: error.message }, 500);
+
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"),
+    action: id ? "routing_rule.updated" : "routing_rule.created", detail: fields,
+  });
+  return c.json({ ok: true });
+});
+
+/** Soft-delete a routing rule. */
+agentRoutes.delete("/company/routing-rules/:id", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
+  const companyId = c.get("companyId");
+  const id = c.req.param("id");
+  const { error } = await supabaseAdmin.from("routing_rules")
+    .update({ is_active: false }).eq("id", id).eq("company_id", companyId);
+  if (error) return c.json({ error: error.message }, 500);
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"), action: "routing_rule.deleted", detail: { id },
+  });
+  return c.json({ ok: true });
+});
+
+/** Publish a new version of the conversation prompt. The guardrails in buildSystemPrompt
+ *  wrap whatever lands here — an admin can change the AI's tone, not its safety rails. */
+agentRoutes.post("/company/prompt", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
+  const companyId = c.get("companyId");
+  const { content, name, channel, project_id, previous_id, version } = await c.req.json();
+  if (!content?.trim()) return c.json({ error: "The prompt can't be empty." }, 400);
+
+  if (previous_id) {
+    await supabaseAdmin.from("prompt_templates")
+      .update({ is_active: false }).eq("id", previous_id).eq("company_id", companyId);
+  }
+  const { error } = await supabaseAdmin.from("prompt_templates").insert({
+    company_id: companyId,
+    project_id: project_id ?? null,
+    channel: channel ?? "any",
+    name: name ?? "Company default",
+    content: content.trim(),
+    version: (Number(version) || 0) + 1,
+    is_active: true,
+  });
+  if (error) return c.json({ error: error.message }, 500);
+
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"), action: "prompt.published",
+    detail: { channel: channel ?? "any", version: (Number(version) || 0) + 1 },
+  });
+  return c.json({ ok: true });
+});
+
 /* Knowledge ingestion — pasted text goes straight to chunking/embedding; uploads land in
    Supabase Storage first, then register here. The 'ingest' worker extracts text
    (pdf/docx/image), chunks ~800 tokens, embeds, inserts doc_chunks, flips status to
    'ready' (or 'failed'). */
 agentRoutes.post("/projects/:id/knowledge/text", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
   const projectId = c.req.param("id");
   const { name, content } = await c.req.json();
   const companyId = c.get("companyId");
@@ -222,6 +312,7 @@ agentRoutes.post("/projects/:id/knowledge/text", async (c) => {
    means the company_id filter below is the only thing scoping this to the caller's
    tenant — it must come from the auth context, never from the request. */
 agentRoutes.delete("/projects/:projectId/knowledge/:docId", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
   const { projectId, docId } = c.req.param();
   const companyId = c.get("companyId");
 
@@ -251,6 +342,7 @@ agentRoutes.delete("/projects/:projectId/knowledge/:docId", async (c) => {
    supabaseAdmin bypasses RLS, so the company prefix below is what scopes the write to
    the caller's tenant — it comes from the auth context, never from the request. */
 agentRoutes.post("/projects/:id/knowledge/upload", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
   const projectId = c.req.param("id");
   const companyId = c.get("companyId");
 
@@ -293,6 +385,7 @@ agentRoutes.post("/projects/:id/knowledge/upload", async (c) => {
    can be retried: a pasted-text document's raw text is passed to the job and never stored,
    so there's nothing to re-extract from — re-paste it instead. */
 agentRoutes.post("/projects/:projectId/knowledge/:docId/retry", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
   const { projectId, docId } = c.req.param();
   const companyId = c.get("companyId");
 

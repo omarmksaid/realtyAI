@@ -4,6 +4,7 @@ import { isDemo } from "@/lib/data";
 import { apiFetch, apiCall, getCompanyId } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 import { useToast } from "@/lib/toast";
+import { useRole } from "@/lib/role";
 
 const demoVoices = [
   { id: "v1", name: "Hope", labels: "Canadian accent · warm · mid 30s", pick: true },
@@ -41,6 +42,7 @@ export default function Settings() {
   const [buyAreaCode, setBuyAreaCode] = useState("");
   const [availableNumbers, setAvailableNumbers] = useState<{ phoneNumber: string; locality: string; region: string }[]>([]);
   const toast = useToast();
+  const { isAdmin } = useRole();
 
   const fetchTeam = useCallback(async () => {
     if (isDemo) return;

@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { demoRules, isDemo } from "@/lib/data";
 import { createClient } from "@/lib/supabase";
-import { apiFetch, getCompanyId } from "@/lib/api";
+import { apiFetch, apiCall, getCompanyId } from "@/lib/api";
+import { useToast } from "@/lib/toast";
+import { useRole } from "@/lib/role";
 import Coverage from "./coverage";
 
 interface Rule { id: string; label: string; window: string; channels: string[]; active: boolean; delayMin: number }
@@ -67,6 +69,8 @@ export default function Playbooks() {
   const [newEnd, setNewEnd] = useState("21:00");
   const [newChannels, setNewChannels] = useState<string[]>(["whatsapp", "email"]);
   const [newDelay, setNewDelay] = useState(15);
+  const toast = useToast();
+  const { isAdmin } = useRole();
 
   function resetForm() {
     setNewLabel("");
@@ -157,29 +161,25 @@ export default function Playbooks() {
       const companyId = await getCompanyId();
       if (!companyId) return;
 
-      const fields = {
-        label: newLabel.trim(),
-        day_type: newDayType,
-        start_time: newStart,
-        end_time: newEnd,
-        channels: newChannels,
-        followup_delay_min: newDelay,
-      };
-
-      const { error } = editingId
-        ? await supabase.from("routing_rules").update(fields).eq("id", editingId)
-        : await supabase.from("routing_rules").insert({
-            ...fields,
-            company_id: companyId,
-            priority: (rawRules.length ? Math.max(...rawRules.map((r) => r.priority)) : 0) + 10,
-          });
-
-      if (error) {
-        console.error("Failed to save rule:", error);
-      } else {
-        cancelEdit();
-        fetchData();
-      }
+      // Through the API, not Supabase: routing rules decide when we spend money on a voice
+      // call, and RLS only checks company membership — never role. Any agent could rewrite
+      // them. The endpoint enforces owner/admin.
+      await apiCall(`/agent/company/routing-rules/${editingId ?? ""}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          label: newLabel.trim(),
+          day_type: newDayType,
+          start_time: newStart,
+          end_time: newEnd,
+          channels: newChannels,
+          followup_delay_min: newDelay,
+          priority: (rawRules.length ? Math.max(...rawRules.map((r) => r.priority)) : 0) + 10,
+        }),
+      });
+      cancelEdit();
+      fetchData();
+    } catch (e: any) {
+      toast.show(e?.message ?? "Couldn't save that rule.");
     } finally {
       setSaving(false);
     }
@@ -187,45 +187,40 @@ export default function Playbooks() {
 
   async function deleteRule(id: string) {
     if (isDemo) return;
-    const supabase = createClient();
-    await supabase.from("routing_rules").update({ is_active: false }).eq("id", id);
-    fetchData();
+    try {
+      await apiCall(`/agent/company/routing-rules/${id}`, { method: "DELETE" });
+      fetchData();
+    } catch (e: any) {
+      toast.show(e?.message ?? "Couldn't delete that rule.");
+    }
   }
 
+  /** Publishing a prompt rewrites what the AI is allowed to say. Owner/admin only —
+   *  enforced by the endpoint, since RLS can't see role. */
   async function savePrompt() {
     if (isDemo || !templateContent.trim()) return;
     setSavingPrompt(true);
     try {
-      const supabase = createClient();
-      const companyId = await getCompanyId();
-      if (!companyId) return;
-
-      if (template) {
-        // Deactivate old version
-        await supabase.from("prompt_templates").update({ is_active: false }).eq("id", template.id);
-      }
-
-      // Insert new version
-      await supabase.from("prompt_templates").insert({
-        company_id: companyId,
-        project_id: template?.project_id ?? null,
-        channel: template?.channel ?? "any",
-        name: template?.name ?? "Company default",
-        content: templateContent.trim(),
-        version: (template?.version ?? 0) + 1,
-        is_active: true,
+      await apiCall("/agent/company/prompt", {
+        method: "POST",
+        body: JSON.stringify({
+          content: templateContent.trim(),
+          name: template?.name ?? "Company default",
+          channel: template?.channel ?? "any",
+          project_id: template?.project_id ?? null,
+          previous_id: template?.id ?? null,
+          version: template?.version ?? 0,
+        }),
       });
-
       fetchData();
-    } catch (e) {
-      console.error("Failed to save prompt:", e);
+      toast.show("Prompt published.", "success");
+    } catch (e: any) {
+      toast.show(e?.message ?? "Couldn't publish that prompt.");
     } finally {
       setSavingPrompt(false);
     }
   }
 
-  /** Keep channels in CHANNEL_OPTIONS order rather than click order — the array is the
-   *  escalation ladder, and ticking "AI call" before "WhatsApp" shouldn't mean we call first. */
   function toggleChannel(ch: string) {
     setNewChannels((prev) => {
       const next = prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch];
@@ -324,7 +319,7 @@ Reply in the lead's language.`;
                 {r.channels.map((c) => (
                   <span key={c} className="chip chip-lang" style={{ marginLeft: 0 }}>{c}</span>
                 ))}
-                {!isDemo && (
+                {!isDemo && isAdmin && (
                   <>
                     <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", marginLeft: 8 }}
                       onClick={() => startEdit(r.id)}>Edit</button>
@@ -340,8 +335,13 @@ Reply in the lead's language.`;
         {showAddRule && <div style={{ marginTop: 14 }}>{ruleForm()}</div>}
 
         <div style={{ marginTop: 14 }}>
-          {!showAddRule && !editingId && (
+          {!showAddRule && !editingId && isAdmin && (
             <button className="btn" onClick={() => { resetForm(); setShowAddRule(true); }}>Add rule</button>
+          )}
+          {!isAdmin && !isDemo && (
+            <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+              Only owners and admins can change routing rules.
+            </p>
           )}
         </div>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
@@ -351,12 +351,22 @@ Reply in the lead's language.`;
 
       <div className="card card-pad">
         <p className="section-label">{promptLabel}</p>
-        <textarea rows={7} value={templateContent || defaultPrompt} onChange={(e) => setTemplateContent(e.target.value)} />
+        {/* Read-only for agents: this text IS what the AI says to leads. */}
+        <textarea rows={7} value={templateContent || defaultPrompt} readOnly={!isAdmin}
+          onChange={(e) => setTemplateContent(e.target.value)} />
         <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-          <button className="btn btn-primary" onClick={savePrompt} disabled={savingPrompt}>
-            {savingPrompt ? "Saving…" : `Save as v${(template?.version ?? 0) + 1}`}
-          </button>
-          <button className="btn btn-quiet">Version history</button>
+          {isAdmin ? (
+            <>
+              <button className="btn btn-primary" onClick={savePrompt} disabled={savingPrompt}>
+                {savingPrompt ? "Saving…" : `Save as v${(template?.version ?? 0) + 1}`}
+              </button>
+              <button className="btn btn-quiet">Version history</button>
+            </>
+          ) : (
+            <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+              Only owners and admins can change the AI&apos;s prompt.
+            </p>
+          )}
         </div>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
           Safety rails (no invented pricing, handoff and opt-out behavior) are enforced in code and can&apos;t be edited away here.

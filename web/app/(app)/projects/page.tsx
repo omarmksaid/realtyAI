@@ -4,6 +4,7 @@ import { demoProjects, isDemo } from "@/lib/data";
 import { createClient } from "@/lib/supabase";
 import { apiFetch, apiCall, getCompanyId } from "@/lib/api";
 import { useToast } from "@/lib/toast";
+import { useRole } from "@/lib/role";
 
 interface Doc { id: string; name: string; source: string; status: string; content?: string }
 interface Project {
@@ -34,6 +35,7 @@ export default function Projects() {
   const [openingDoc, setOpeningDoc] = useState<string | null>(null);
   const [retryingDoc, setRetryingDoc] = useState<string | null>(null);
   const toast = useToast();
+  const { isAdmin } = useRole();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
