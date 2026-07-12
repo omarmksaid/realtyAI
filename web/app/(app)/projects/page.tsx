@@ -102,12 +102,18 @@ export default function Projects() {
         method: "POST",
         body: JSON.stringify({ name: "Pasted text", content: pasteText.trim() }),
       });
-      if (res.ok) {
-        setPasteText("");
-        fetchProjects(); // refresh docs list
+      // Surface the failure. This used to be a bare `if (res.ok)` with no else, so a
+      // rejected request discarded the user's text with no error and no clue why.
+      if (!res.ok) {
+        console.error("Failed to add knowledge:", res.status, await res.text());
+        alert("Couldn't save that knowledge source. Your text is still in the box — please try again.");
+        return; // keep pasteText so the user doesn't lose what they typed
       }
+      setPasteText("");
+      fetchProjects();
     } catch (e) {
       console.error("Failed to add knowledge", e);
+      alert("Couldn't save that knowledge source. Your text is still in the box — please try again.");
     } finally {
       setSubmitting(false);
     }
