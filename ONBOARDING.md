@@ -2,167 +2,184 @@
 
 Who does what, what's automated, and what's a queue you can't shorten.
 
-**Status:** the WhatsApp/Meta specifics below are marked ⚠️ where they rest on general
-knowledge rather than verified current documentation. A research pass on Meta's Tech
-Provider model, Embedded Signup, and template APIs is in flight — this file will be
-corrected against it. Do not commit to a customer SLA on the ⚠️ items yet.
+The WhatsApp/Meta sections are now grounded in primary sources (Meta's Tech Provider and
+Embedded Signup docs, Twilio's Tech Provider program), adversarially verified. Claims marked
+**[2-1]** had one dissenting verifier — treat as likely but not settled.
 
 ---
 
-## The short version
+## The headline
 
-| | Who | How long |
-|---|---|---|
-| Create workspace, invite team | **Brokerage** (self-serve) | Minutes |
-| Buy number, wire webhooks, import to Vapi | **realtyAI** (automated) | Seconds |
-| Upload brochures / price sheets | **Brokerage** | Their pace |
-| Set coverage hours, routing rules | **Brokerage** | Minutes |
-| **AI voice calls live** | — | **Same day** ✅ |
-| Provide business verification documents | **Brokerage** — nobody can do this for them | Their pace |
-| Submit WhatsApp sender to Meta | **realtyAI** (on their behalf) | Minutes to submit |
-| Meta business verification | **Meta** — a queue | ⚠️ Days |
-| Author + submit message templates | **realtyAI** | Minutes to submit |
-| Template approval | **Meta** — a queue | ⚠️ Hours to days |
-| **WhatsApp live** | — | ⚠️ **Days, gated on Meta** |
+**Voice is live on day one. WhatsApp is not.** Everything blocking WhatsApp is a Meta
+approval queue. Sell against that.
 
-**The headline: voice works on day one. WhatsApp does not.** Everything blocking WhatsApp
-is a Meta approval queue, and no amount of engineering removes it. Sell against that.
+But the WhatsApp picture is much better than a manual back-and-forth: **Embedded Signup lets
+each brokerage self-onboard their own WhatsApp account inside realtyAI's UI**, in one
+Login-with-Facebook popup. The manual submission flow does not need to be built.
+
+**The real constraint is a one-time cost on realtyAI, not a per-brokerage cost.**
 
 ---
 
-## What realtyAI does (automated — seconds)
+## The one-time work realtyAI must do BEFORE onboarding anyone
 
-Triggered by `POST /agent/company/buy-number`:
+This is the gate. Until it's done, **you cannot onboard a single brokerage's WhatsApp.**
 
-1. **Buy a Twilio number** in the requested area code.
-2. **Configure its webhooks** — inbound WhatsApp/SMS → `/webhooks/twilio/whatsapp`,
-   delivery receipts → `/webhooks/twilio/status`.
-3. **Import it into Vapi** for AI voice, and set the end-of-call webhook + secret at import
-   time. This writes `settings.vapi_phone_id`, which `voice.ts` requires.
+1. **Enable 2FA and complete Meta Business Verification on realtyAI's own Meta Business
+   Manager.** A vendor-side prerequisite, done once.
+   > *"To participate in the Tech Provider program you need to turn on two-factor
+   > authentication (2FA) and complete business verification in your Meta Business Manager
+   > settings."*
+2. **Create a Meta app with the WhatsApp use case** and a connected business portfolio.
+3. **Pass Meta App Review for Advanced Access** to `whatsapp_business_messaging` and
+   `whatsapp_business_management` — required to send on behalf of clients and access their
+   WABAs.
+4. **Complete Access Verification.**
+5. **Build the Embedded Signup flow** — Meta app, Configuration ID, Partner Solution ID,
+   Facebook JavaScript SDK. Must use **Facebook Login for Business** (not plain Facebook
+   Login), which scopes the token so you only get WhatsApp-relevant assets. **[2-0]**
 
-Retry, if the Vapi import fails: `POST /agent/company/provision-voice`.
+⚠️ **Meta Business Verification "varies by region and can take several weeks."** That is
+Twilio's own warning, and it applies to *your* verification. **Start this now** — it is the
+long pole in the entire product, and it blocks every WhatsApp customer you will ever have.
 
-**After this the brokerage can place AI voice calls.** Voice has no external approval
-gate — that's why it's the demo-day channel.
+### The throughput cap — this is the number that matters
+
+| Vendor state | New WhatsApp customers per rolling 7 days |
+|---|---|
+| App not approved for Advanced Access | **0** — you cannot onboard anyone |
+| Advanced Access approved (default) | **10 / week** |
+| + Business Verification + App Review + Access Verification | **200 / week** |
+| Above 200/week | Must become a **Meta Business Partner** |
+
+> *"By default, you can onboard up to 10 new business customers in a rolling 7-day window...
+> If you complete Business Verification, App Review, and Access Verification, your limit is
+> automatically increased to 200."*
+
+**"Onboard tens of brokerages at once" is fine — 200/week is not your bottleneck.** Getting
+*through* verification is.
 
 ---
 
-## What realtyAI does (manual — but it's your work, not theirs)
+## The architectural question — answered, and not by choice
 
-These are yours to do, on the brokerage's behalf. They are the reason onboarding twenty
-brokerages is a pipeline, not a button.
+You picked "own sender per brokerage." **It turns out that isn't a choice — it's the only
+option.**
 
-- **Submit the WhatsApp sender request** to Meta using the documents the brokerage provided.
-- **Author the message templates** and submit them for approval. A first-touch template is
-  mandatory — WhatsApp forbids business-initiated free-form messages.
-- **Watch the queue** and record the result: `PUT /agent/company/whatsapp-sender` with the
-  approved template SIDs.
+> Twilio: *"Each WABA must be mapped to a single Twilio account or subaccount. You must keep
+> track of every customer business or brand and connect each one to a dedicated Twilio
+> subaccount."*
+>
+> Meta: *"Business customers onboarded via Embedded Signup own all of their WhatsApp
+> assets."* The vendor receives only delegated access — the customer's WABA ID, phone number
+> ID, and an exchangeable token.
 
-⚠️ **How much of this is automatable is exactly what the research is resolving.** If Meta's
-Tech Provider model and Embedded Signup work the way they appear to, most of the submission
-could become self-serve. Do not build the manual flow out before that lands.
+**A SaaS vendor cannot host many clients' senders under one shared WABA.** There is no
+"Option B."
+
+Two consequences worth internalising:
+
+- **Each brokerage needs its own Twilio subaccount**, mapped 1:1 to their WABA. realtyAI
+  currently uses one flat Twilio account. **This is a real architectural change we have not
+  made.**
+- **Messaging limits are per business portfolio, not per number.** Because each brokerage
+  owns their own portfolio, each gets their **own** limit — they don't share a pool. That's
+  good. (Had a shared-WABA model been possible, every client would have contended for one
+  limit.)
+
+### Lower CASL exposure, as a bonus
+
+From the CASL research: CRTC Bulletin 2018-415 names *"software and application developers"*
+as liable under s.9 for aiding a customer's violation — **strict liability**, and the test is
+**level of control**. realtyAI already composes the message, selects the recipient, and
+executes the send. Client-owned WABAs put the sender in the brokerage's name and draw a
+clearer boundary than hosting it yourself would have. The forced architecture is also the
+safer one.
+
+---
+
+## Per-brokerage onboarding — what actually happens
+
+### realtyAI (automated, seconds)
+
+`POST /agent/company/buy-number`:
+1. Buy a Twilio number.
+2. Configure its webhooks (inbound → `/webhooks/twilio/whatsapp`, receipts →
+   `/webhooks/twilio/status`).
+3. **Import it into Vapi**, setting the end-of-call webhook + secret at import time. Writes
+   `settings.vapi_phone_id`, which `voice.ts` requires.
+
+Retry if the Vapi import fails: `POST /agent/company/provision-voice`.
+
+**→ AI voice calls work now.** No external approval gate. This is the demo-day channel.
+
+### The brokerage (self-serve, minutes — via Embedded Signup)
+
+They click **"Connect WhatsApp"** in realtyAI and complete one Meta popup:
+- Log in with Facebook
+- Create or select their Meta Business Portfolio
+- Create their WhatsApp Business Account (WABA)
+- Optionally verify a phone number by OTP
+
+> *"The customer clicks Login with Facebook in your application to open the Embedded Signup
+> popup... In the popup window, the customer follows the Embedded Signup flow."*
+
+**realtyAI never calls a Meta API.** After the popup completes, your backend registers the
+sender through **Twilio's Messaging API Senders resource** — *"the ISV won't need to call any
+Meta APIs."*
+
+### Meta (a queue — nobody can shorten it)
+
+- **Business verification** for the brokerage. ⚠️ Several weeks in the worst case.
+  **[2-1]** A partner (you) can verify the business *on the client's behalf* — an officially
+  supported path, and worth doing.
+- **Template approval.**
+
+### Messaging limits — plan for the cold start
+
+A new business portfolio starts at **250 unique contacts per 24 hours**, scaling to 2,000 →
+10,000 → 100,000 → unlimited.
+
+**This matters operationally:** if a brokerage's ad campaign dumps 300 leads on day one, the
+first 250 get WhatsApp and the rest silently don't. Voice has no such cap — another reason
+voice is the stronger day-one channel.
 
 ---
 
 ## What the brokerage MUST do (you cannot do it for them)
 
-This is the list to put in front of a customer on day one.
-
-- **Business verification documents.** Meta verifies *their* legal entity, not yours:
-  registered business name, business registration/incorporation document, a verifiable
-  address, and a public website with matching details. **This is the single most common
-  reason onboarding stalls** — the brokerage sits on it for a week.
-- **Choose the WhatsApp display name.** ⚠️ Meta rejects names that don't match the verified
-  business, and the rules are strict.
-- **Upload their knowledge** — brochures, price sheets, feature sheets. Without it the AI
-  deflects every question to "the team will confirm in the morning," which is a bad demo and
-  a worse product.
-- **Set coverage hours.** Determines what counts as after-hours, which is the whole trigger
-  for the product.
+- **Complete the Embedded Signup popup.** Two minutes, but it needs a Facebook login and
+  authority to create a business portfolio — that's the *owner*, not an agent.
+- **Provide business verification details.** Meta verifies *their* legal entity: registered
+  name, incorporation document, verifiable address, public website with matching details.
+  **This is where onboarding actually stalls** — the brokerage sits on it.
+- **Choose the WhatsApp display name.** Meta rejects names that don't match the verified
+  business.
+- **Upload their knowledge** — brochures, price sheets. Without it the AI deflects every
+  question to "the team will confirm in the morning."
+- **Set coverage hours** — defines after-hours, which is the entire product trigger.
 
 ---
 
-## What nobody can do
+## Gap analysis — what realtyAI has NOT built
 
-**Meta's review queue.** ⚠️ Business verification takes days; template approval hours to
-days. There is no API to jump it, no partner tier that skips it, and no code that helps.
+| | Status |
+|---|---|
+| Buy number → webhooks → Vapi import | ✅ Built, automated |
+| Provisioning status card (`GET /company/provisioning`) | ✅ Built |
+| Per-company number / templates / brokerage name (no platform fallback) | ✅ Built |
+| **Meta Business Verification for realtyAI itself** | ❌ **Not started — blocks everything** |
+| **Meta app + App Review + Advanced Access** | ❌ Not started |
+| **Embedded Signup flow in the UI** | ❌ Not built |
+| **Twilio subaccount per brokerage (1:1 with WABA)** | ❌ **Not built — flat account today** |
+| Register sender via Twilio Senders API post-signup | ❌ Not built |
+| Template creation/submission | ❌ Manual today (SIDs pasted into Settings) |
+| CASL: identification + unsubscribe on WhatsApp/SMS | ❌ Email only |
+| CASL: 6-month implied-consent window | ❌ Not enforced |
+| CASL: STOP suppression across all channels | ❌ Channel-local |
 
-Plan onboarding around this: **voice on day one, WhatsApp when Meta clears.**
-
----
-
-## The architectural fork (decided: Option A)
-
-**Option A — each brokerage owns their own Meta Business Account and WhatsApp sender.**
-✅ *Chosen.*
-- The brokerage's business is verified; the sender and templates live in **their** account.
-- If they leave, they keep their number and sender. Clean boundary.
-- **Lower CASL exposure** (see below).
-- Cost: more per-tenant provisioning; less self-serve.
-
-**Option B — everything under realtyAI's Meta Business Account**, brokerages as sub-accounts
-under a Tech Provider / BSP arrangement.
-- Faster, more self-serve onboarding.
-- But **you** own the senders, **you** submit the templates, and you become a WhatsApp
-  Business Solution Provider in practice — with Meta's obligations attached.
-- **Higher CASL exposure** — see below.
-
-⚠️ The research in flight may reveal a middle path (Tech Provider + Embedded Signup, where
-the brokerage self-onboards their own WABA through your UI in minutes). If so, that is
-strictly better than the manual version of Option A and we should take it.
-
----
-
-## Why the fork is a legal question, not just an operational one
-
-From the CASL research (see the Canadian SMS/CASL findings):
-
-> CASL s.9 makes it a violation to "aid, induce, procure or cause to be procured" a
-> violation. **CRTC Bulletin 2018-415 expressly names "software and application developers"**
-> as intermediaries at risk. It is **strict liability** — it attaches "even if they did not
-> intend to do so or were unaware that their activities enabled or facilitated
-> contraventions." The only defence is s.33 due diligence.
-
-The CRTC's test is **level of control**. realtyAI already **composes the message, selects the
-recipient, and executes the send** — that is the high end of control on any reading. Under
-**Option B** you would additionally own the sender, which is maximal control and maximal
-exposure. **Option A** puts the sender in the brokerage's name and draws a clearer line.
-
-**This is not theoretical.** Hudson's Bay paid **$120,000** for a *defective unsubscribe
-alone* — consent was not even at issue.
-
-### The s.33 due-diligence posture realtyAI needs
-
-- **Consent attestation at onboarding** — the brokerage confirms their lead source produces
-  CASL-valid consent. (Not built.)
-- **Hardcoded identification + unsubscribe** in the message layer, which the brokerage cannot
-  edit away. The existing `buildSystemPrompt` guardrail pattern is exactly the right shape.
-  (Email has a CASL footer; **WhatsApp and SMS do not.**)
-- **STOP suppression across every channel**, not just the one they replied on. (Currently
-  channel-local.)
-- **Six-month implied-consent window** enforced — a lead who inquired 7 months ago must not
-  be messaged. (Not built.)
-- **Per-company audit logging.** (Exists.)
-- **CASL terms in the customer agreement.** (Yours to write.)
-
----
-
-## The provisioning state machine
-
-`GET /agent/company/provisioning` returns every step, whether it's done, what's blocking, and
-the action to resolve it. Rendered as the **Setup Status** card at the top of Settings.
-
-| Step | Blocking? | Owner | Automated? |
-|---|---|---|---|
-| `number` | **Yes** — nothing works without it | realtyAI | ✅ Seconds |
-| `voice` | No | realtyAI | ✅ Seconds (auto on purchase, retryable) |
-| `whatsapp_sender` | No | Brokerage docs → realtyAI submits → **Meta approves** | ❌ Queue |
-| `templates` | No | realtyAI authors → **Meta approves** | ❌ Queue |
-| `hours` | No | Brokerage | ✅ Self-serve |
-
-**Why this exists:** a half-provisioned workspace used to look *identical* to a working one
-right up until a lead arrived and the send failed. At two customers you remember. At twenty
-you do not.
+**The two big ones:** Meta verification (a calendar problem — start today) and Twilio
+subaccounts (an architecture problem — every brokerage needs one).
 
 ---
 
@@ -171,29 +188,35 @@ you do not.
 1. **A workspace sends only from its own number.** The adapters used to fall back to the
    platform's `TWILIO_WHATSAPP_NUMBER` / `VAPI_PHONE_NUMBER_ID` when a company wasn't
    provisioned — so an unprovisioned brokerage's leads received messages from **our** number,
-   and their replies landed in a webhook we couldn't attribute. That fallback now requires an
-   explicit `settings.use_platform_number` opt-in (dev/demo only) and otherwise **fails with
-   an actionable error**.
-2. **Template SIDs are per-sender.** A template SID belongs to the sender's Meta account. It
-   **cannot** be shared across brokerages. `settings.first_touch_template_sid`, never the env
-   var.
+   and their replies landed in a webhook we couldn't attribute. That now requires an explicit
+   `settings.use_platform_number` opt-in (dev/demo only) and otherwise **fails with an
+   actionable error**.
+2. **Template SIDs are per-sender.** A template SID belongs to the client's own WABA. It
+   **cannot** be shared across brokerages.
 3. **The brokerage's own name**, never `env.BROKERAGE_NAME` — that global would have
    introduced the AI as the same company to every tenant's leads.
-4. **`companies.settings` is the source of truth.** The env vars are a dev fallback, not
+4. **`companies.settings` is the source of truth.** Env vars are a dev fallback, not
    configuration.
+5. **One Twilio subaccount per brokerage**, 1:1 with their WABA. *(Not yet implemented.)*
 
 ---
 
-## Open questions (research in flight)
+## Recommended sequence
 
-1. Can a brokerage self-onboard their WABA via **Embedded Signup** through realtyAI's UI —
-   turning the manual submission into minutes? Does Twilio support it?
-2. **Tech Provider vs. own-BM**: can realtyAI host senders for many clients under its own
-   Meta Business Account, and what does that cost in obligations (and CASL exposure)?
-3. Can templates be **created and submitted programmatically** (Twilio Content Template API /
-   Meta API), and can one be authored once and cloned across many client WABAs — or must each
-   be submitted per-WABA?
-4. Real 2026 SLAs for business verification and template approval.
-5. New-sender **messaging limits and quality tiers** — a brand-new sender may be throttled,
-   which matters if a brokerage's ad campaign dumps 200 leads on day one.
-6. **Display name rejection rules** — the most common self-inflicted delay.
+1. **Today:** start Meta Business Verification for realtyAI. It's weeks of waiting and it
+   gates everything. Nothing else on this list is on the critical path until it's done.
+2. **This week:** demo on **voice** — it works today and has no approval gate.
+3. **While Meta reviews:** build the Twilio subaccount-per-brokerage architecture, and the
+   CASL compliance layer (identification + unsubscribe on WhatsApp, cross-channel STOP,
+   six-month consent window). Both are needed regardless.
+4. **Once verified:** build Embedded Signup. Onboarding then becomes: brokerage clicks one
+   button, completes one popup, and waits on Meta's queue — with the Setup Status card
+   showing them exactly where they are.
+
+---
+
+## Sources
+
+Meta Tech Provider / Solution Partner overview · Meta Embedded Signup overview · Meta Tech
+Provider getting-started · Twilio WhatsApp Tech Provider Program · Twilio Embedded Signup
+docs. All primary. Verified 2026-07.
