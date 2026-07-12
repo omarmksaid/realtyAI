@@ -208,6 +208,35 @@ agentRoutes.post("/projects/:id/knowledge/text", async (c) => {
   return c.json({ ok: true, documentId: doc!.id });
 });
 
+/* Deleting a knowledge source has to go through the API: RLS has no delete policy, so
+   a delete issued from the browser is silently denied. supabaseAdmin bypasses RLS, which
+   means the company_id filter below is the only thing scoping this to the caller's
+   tenant — it must come from the auth context, never from the request. */
+agentRoutes.delete("/projects/:projectId/knowledge/:docId", async (c) => {
+  const { projectId, docId } = c.req.param();
+  const companyId = c.get("companyId");
+
+  const { data: doc } = await supabaseAdmin
+    .from("documents")
+    .select("id")
+    .eq("id", docId)
+    .eq("project_id", projectId)
+    .eq("company_id", companyId)
+    .maybeSingle();
+  if (!doc) return c.json({ error: "not found" }, 404);
+
+  // Chunks are what the AI actually reads, so they must go too. No FK cascade here.
+  const { error: chunkErr } = await supabaseAdmin
+    .from("doc_chunks").delete().eq("document_id", docId).eq("company_id", companyId);
+  if (chunkErr) return c.json({ error: chunkErr.message }, 500);
+
+  const { error: docErr } = await supabaseAdmin
+    .from("documents").delete().eq("id", docId).eq("company_id", companyId);
+  if (docErr) return c.json({ error: docErr.message }, 500);
+
+  return c.json({ ok: true });
+});
+
 agentRoutes.post("/projects/:id/knowledge/drive", async (c) => {
   const projectId = c.req.param("id");
   const { folderUrl } = await c.req.json();

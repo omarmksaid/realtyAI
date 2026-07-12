@@ -21,6 +21,7 @@ export default function Projects() {
   const [pasteText, setPasteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [driveFolderUrls, setDriveFolderUrls] = useState<Record<string, string>>({});
   const [linkingSaving, setLinkingSaving] = useState(false);
@@ -164,16 +165,29 @@ export default function Projects() {
     }
   }
 
-  async function deleteDoc(docId: string) {
+  /** Goes through the API, not Supabase directly: RLS defines no delete policy, so a
+   *  browser-issued delete is denied — and the client returns that as `{error}` rather
+   *  than throwing, which is why this used to fail silently and leave the row on screen. */
+  async function deleteDoc(projectId: string, docId: string) {
     if (isDemo) return;
     if (!confirm("Delete this knowledge source? The AI will no longer use it.")) return;
+    setDeletingDoc(docId);
     try {
-      const supabase = createClient();
-      await supabase.from("doc_chunks").delete().eq("document_id", docId);
-      await supabase.from("documents").delete().eq("id", docId);
-      fetchProjects();
+      const res = await apiFetch(`/agent/projects/${projectId}/knowledge/${docId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        console.error("Failed to delete document:", res.status, body);
+        alert("Couldn't delete that knowledge source. Please try again.");
+        return;
+      }
+      await fetchProjects();
     } catch (e) {
       console.error("Failed to delete document:", e);
+      alert("Couldn't delete that knowledge source. Please try again.");
+    } finally {
+      setDeletingDoc(null);
     }
   }
 
@@ -269,7 +283,14 @@ export default function Projects() {
                             {d.status === "ready" ? "Ready" : "Processing…"}
                           </span>
                           {!isDemo && (
-                            <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }} onClick={(e) => { e.stopPropagation(); deleteDoc(d.id); }}>Delete</button>
+                            <button
+                              className="btn btn-quiet"
+                              style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }}
+                              disabled={deletingDoc === d.id}
+                              onClick={(e) => { e.stopPropagation(); deleteDoc(p.id, d.id); }}
+                            >
+                              {deletingDoc === d.id ? "Deleting…" : "Delete"}
+                            </button>
                           )}
                         </span>
                       </div>
