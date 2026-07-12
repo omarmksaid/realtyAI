@@ -109,6 +109,53 @@ teamRoutes.patch("/members/:userId", async (c) => {
   return c.json({ ok: true });
 });
 
+/** Remove a member from the workspace. Owner/admin only.
+ *
+ *  This has to go through the API. memberships has SELECT and INSERT policies and NO
+ *  DELETE policy — with RLS on, a browser-issued delete is denied outright. The Settings
+ *  page was deleting straight from Supabase and discarding the error, so the row vanished
+ *  from the UI while the membership survived: a revoked user kept full access, and the
+ *  dashboard said otherwise. A security control that silently no-ops is worse than none. */
+teamRoutes.delete("/members/:userId", async (c) => {
+  if (c.get("role") === "agent") {
+    return c.json({ error: "Only owners and admins can remove members." }, 403);
+  }
+  const target = c.req.param("userId");
+  const companyId = c.get("companyId");
+
+  if (target === c.get("userId")) {
+    return c.json({ error: "You can't remove yourself." }, 400);
+  }
+
+  const { data: member } = await supabaseAdmin
+    .from("memberships").select("role, email")
+    .eq("company_id", companyId).eq("user_id", target).maybeSingle();
+  if (!member) return c.json({ error: "That person isn't in this workspace." }, 404);
+
+  // Never orphan the workspace. Only an owner can remove another owner, and never the last.
+  if (member.role === "owner") {
+    if (c.get("role") !== "owner") {
+      return c.json({ error: "Only an owner can remove another owner." }, 403);
+    }
+    const { count } = await supabaseAdmin
+      .from("memberships").select("user_id", { count: "exact", head: true })
+      .eq("company_id", companyId).eq("role", "owner");
+    if ((count ?? 0) <= 1) {
+      return c.json({ error: "You can't remove the last owner of a workspace." }, 400);
+    }
+  }
+
+  const { error } = await supabaseAdmin.from("memberships")
+    .delete().eq("company_id", companyId).eq("user_id", target);
+  if (error) return c.json({ error: error.message }, 500);
+
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"),
+    action: "member.removed", detail: { removed_user_id: target, email: member.email },
+  });
+  return c.json({ ok: true });
+});
+
 /* ============ Public accept (JWT-verified, but no membership yet — that's the point) ============ */
 
 /** Resolve an invite token to the email it was issued to, so the join page can pin the

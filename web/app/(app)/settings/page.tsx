@@ -30,6 +30,7 @@ export default function Settings() {
   const [pending, setPending] = useState<Invite[]>(isDemo ? demoPending : []);
   const [inviteEmail, setInviteEmail] = useState("");
   const [busyInvite, setBusyInvite] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [spend, setSpend] = useState<Record<string, number>>({});
@@ -106,40 +107,46 @@ export default function Settings() {
 
   useEffect(() => { fetchTeam(); }, [fetchTeam]);
 
+  /** Through the API. memberships has no UPDATE policy either, so this was silently failing
+   *  against Supabase: the chip flipped and nothing persisted — meaning nobody got paged for
+   *  a hot lead while the dashboard showed them on call. PATCH /team/members/:userId already
+   *  existed; the page just wasn't using it. */
   async function toggleOnCall(member: Member) {
     const newVal = !member.on_call;
     setMembers((ms) => ms.map((m) => m.user_id === member.user_id ? { ...m, on_call: newVal } : m));
     if (isDemo) return;
     try {
-      const supabase = createClient();
-      const companyId = await getCompanyId();
-      await supabase.from("memberships")
-        .update({ on_call: newVal })
-        .eq("user_id", member.user_id)
-        .eq("company_id", companyId);
-    } catch (e) {
+      await apiCall(`/team/members/${member.user_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ on_call: newVal }),
+      });
+    } catch (e: any) {
       console.error("Failed to toggle on-call", e);
+      // Roll the chip back — don't leave it showing a state the server rejected.
       setMembers((ms) => ms.map((m) => m.user_id === member.user_id ? { ...m, on_call: !newVal } : m));
+      toast.show(e?.message ?? "Couldn't change on-call status.");
     }
   }
 
+  /** Through the API. Deleting straight from Supabase silently failed — memberships has no
+   *  DELETE policy — while the UI removed the row anyway, so a "revoked" user kept access
+   *  and the dashboard claimed they were gone. Never report a revoke that didn't happen. */
   async function removeMember(member: Member) {
-    if (member.role === "owner") return;
-    if (!confirm(`Remove ${member.email} from this workspace?`)) return;
+    if (!confirm(`Remove ${member.email} from this workspace? They lose access immediately.`)) return;
     if (isDemo) {
       setMembers((ms) => ms.filter((m) => m.user_id !== member.user_id));
       return;
     }
+    setRemoving(member.user_id);
     try {
-      const supabase = createClient();
-      const companyId = await getCompanyId();
-      await supabase.from("memberships")
-        .delete()
-        .eq("user_id", member.user_id)
-        .eq("company_id", companyId);
-      setMembers((ms) => ms.filter((m) => m.user_id !== member.user_id));
-    } catch (e) {
+      await apiCall(`/team/members/${member.user_id}`, { method: "DELETE" });
+      await fetchTeam(); // reflect what the server actually did, not what we hoped
+      toast.show(`${member.email} no longer has access.`, "success");
+    } catch (e: any) {
       console.error("Failed to remove member", e);
+      toast.show(e?.message ?? "Couldn't remove that member.");
+    } finally {
+      setRemoving(null);
     }
   }
 
@@ -259,8 +266,16 @@ export default function Settings() {
               <span className={`chip ${m.on_call ? "chip-ai" : "chip-lang"}`} style={{ cursor: "pointer" }} onClick={() => toggleOnCall(m)}>
                 {m.on_call ? "On call" : "Off"}
               </span>
-              {m.role !== "owner" && m.user_id !== currentUserId && (
-                <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }} onClick={() => removeMember(m)}>Remove</button>
+              {/* Revoking access is an owner/admin action — the API enforces it too. */}
+              {isAdmin && m.role !== "owner" && m.user_id !== currentUserId && (
+                <button
+                  className="btn btn-quiet"
+                  style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }}
+                  disabled={removing === m.user_id}
+                  onClick={() => removeMember(m)}
+                >
+                  {removing === m.user_id ? "Removing…" : "Remove"}
+                </button>
               )}
             </span>
           </div>
