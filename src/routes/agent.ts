@@ -289,6 +289,29 @@ agentRoutes.post("/projects/:id/knowledge/upload", async (c) => {
   return c.json({ ok: true, documentId: doc!.id });
 });
 
+/* Re-run ingest on a document that failed (a provider outage, a rate limit). Only uploads
+   can be retried: a pasted-text document's raw text is passed to the job and never stored,
+   so there's nothing to re-extract from — re-paste it instead. */
+agentRoutes.post("/projects/:projectId/knowledge/:docId/retry", async (c) => {
+  const { projectId, docId } = c.req.param();
+  const companyId = c.get("companyId");
+
+  const { data: doc } = await supabaseAdmin
+    .from("documents")
+    .select("id, source, storage_path")
+    .eq("id", docId).eq("project_id", projectId).eq("company_id", companyId)
+    .maybeSingle();
+  if (!doc) return c.json({ error: "not found" }, 404);
+  if (doc.source !== "upload" || !doc.storage_path) {
+    return c.json({ error: "Only uploaded files can be retried — re-paste the text instead." }, 400);
+  }
+
+  await supabaseAdmin.from("documents").update({ status: "processing" }).eq("id", docId);
+  const { boss } = await import("../jobs/queue");
+  await boss.send("ingest", { documentId: docId });
+  return c.json({ ok: true });
+});
+
 /* Signed URL so the dashboard can preview/download an uploaded PDF or image. The bucket
    is private, so a bare storage URL 404s — this mints a short-lived signed one, scoped to
    the caller's company. */

@@ -15,7 +15,10 @@ interface Project {
 const MAX_UPLOAD_MB = 20;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1_000_000;
 
-const statusColor: Record<string, string> = { ready: "chip-ai", processing: "chip-warm" };
+// 'failed' had no entry, and the label was a binary ready-or-"Processing…" — so a document
+// that failed to ingest sat on "Processing…" forever with no way to tell.
+const statusColor: Record<string, string> = { ready: "chip-ai", processing: "chip-warm", failed: "chip-cold" };
+const statusLabel: Record<string, string> = { ready: "Ready", processing: "Processing…", failed: "Failed" };
 const sourceIcon: Record<string, string> = { text: "Text", upload: "Upload" };
 
 export default function Projects() {
@@ -28,6 +31,7 @@ export default function Projects() {
   const [uploading, setUploading] = useState(false);
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const [openingDoc, setOpeningDoc] = useState<string | null>(null);
+  const [retryingDoc, setRetryingDoc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -169,6 +173,29 @@ export default function Projects() {
     }
   }
 
+  /** Re-run ingest on a document that failed. Previously a failed document was dead —
+   *  it showed "Processing…" forever and the only recovery was delete-and-re-upload. */
+  async function retryDoc(projectId: string, docId: string) {
+    if (isDemo) return;
+    setRetryingDoc(docId);
+    try {
+      const res = await apiFetch(`/agent/projects/${projectId}/knowledge/${docId}/retry`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        console.error("Retry failed:", res.status, await res.text());
+        alert("Couldn't retry that document. Please try again.");
+        return;
+      }
+      await fetchProjects();
+    } catch (e) {
+      console.error("Retry failed", e);
+      alert("Couldn't retry that document. Please try again.");
+    } finally {
+      setRetryingDoc(null);
+    }
+  }
+
   /** Open the original uploaded PDF/image. The bucket is private, so a bare storage URL
    *  404s — the API mints a short-lived signed URL scoped to the caller's company. */
   async function viewDoc(projectId: string, docId: string) {
@@ -305,9 +332,19 @@ export default function Projects() {
                           {d.content && <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: 8 }}>{expandedDoc === d.id ? "▾" : "▸"}</span>}
                         </span>
                         <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <span className={`chip ${statusColor[d.status]}`}>
-                            {d.status === "ready" ? "Ready" : "Processing…"}
+                          <span className={`chip ${statusColor[d.status] ?? "chip-warm"}`}>
+                            {statusLabel[d.status] ?? d.status}
                           </span>
+                          {!isDemo && d.status === "failed" && (
+                            <button
+                              className="btn btn-quiet"
+                              style={{ fontSize: 12, padding: "2px 8px" }}
+                              disabled={retryingDoc === d.id}
+                              onClick={(e) => { e.stopPropagation(); retryDoc(p.id, d.id); }}
+                            >
+                              {retryingDoc === d.id ? "Retrying…" : "Retry"}
+                            </button>
+                          )}
                           {/* Only uploads have an original file behind them; pasted text doesn't. */}
                           {!isDemo && d.source === "upload" && (
                             <button

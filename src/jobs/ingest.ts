@@ -119,26 +119,77 @@ export async function registerIngest(boss: PgBoss) {
       if (!text.trim()) throw new Error("no extractable text");
 
       const chunks = chunkText(text);
-      // Voyage batch limit is generous; embed in slices of 64 to stay safe
-      const rows: any[] = [];
-      for (let i = 0; i < chunks.length; i += 64) {
-        const slice = chunks.slice(i, i + 64);
-        const vectors = await embed(slice, "document");
-        slice.forEach((content, j) => rows.push({
-          company_id: doc.company_id, document_id: doc.id, project_id: doc.project_id,
-          content, embedding: vectors[j],
-        }));
-      }
-      // Re-ingest = replace: drop old chunks for this document first
+
+      // Write the text FIRST, embed after. Embedding used to come first, so a Voyage rate
+      // limit threw away a document whose text had extracted perfectly — and voice reads
+      // doc_chunks.content directly, never the vector, so it lost knowledge over an API it
+      // doesn't even use. Text is the thing we can't recreate; a vector we can backfill.
       await supabaseAdmin.from("doc_chunks").delete().eq("document_id", doc.id);
+      const rows = chunks.map((content) => ({
+        company_id: doc.company_id, document_id: doc.id, project_id: doc.project_id,
+        content, embedding: null as number[] | null,
+      }));
       for (let i = 0; i < rows.length; i += 100) {
         const { error } = await supabaseAdmin.from("doc_chunks").insert(rows.slice(i, i + 100));
         if (error) throw new Error(error.message);
       }
+
+      // Now embed. A failure here degrades WhatsApp from semantic retrieval to none — it
+      // does not cost us the document. Mark it so a backfill can find it later.
+      let embedded = true;
+      try {
+        const { data: stored } = await supabaseAdmin
+          .from("doc_chunks").select("id, content").eq("document_id", doc.id).order("id");
+        for (let i = 0; i < (stored?.length ?? 0); i += 32) {
+          const slice = (stored ?? []).slice(i, i + 32);
+          const vectors = await embed(slice.map((s: any) => s.content), "document");
+          await Promise.all(
+            slice.map((s: any, j: number) =>
+              supabaseAdmin.from("doc_chunks").update({ embedding: vectors[j] }).eq("id", s.id)
+            )
+          );
+        }
+      } catch (e) {
+        embedded = false;
+        console.error(`Embedding failed for document ${doc.id} — text is stored and usable on ` +
+          `calls; WhatsApp retrieval will be degraded until re-embedded.`, e);
+      }
+
+      // 'ready' either way: the document IS usable — voice reads doc_chunks.content and
+      // never touches the vector. (status is CHECK-constrained to processing|ready|failed,
+      // so there's no 'partial' to use without a migration.) The unembedded chunks are
+      // findable with `embedding is null`, which is what a backfill keys off.
       await supabaseAdmin.from("documents").update({ status: "ready" }).eq("id", doc.id);
+      if (!embedded) {
+        await boss.send("embed-backfill", { documentId: doc.id }, { startAfter: 120 });
+      }
     } catch (e: any) {
       await supabaseAdmin.from("documents").update({ status: "failed" }).eq("id", doc.id);
       throw e; // pg-boss retries with backoff; stays 'failed' if retries exhaust
     }
+  });
+
+  /* Re-embed chunks that were stored with text but no vector (a Voyage outage or rate
+     limit during ingest). Until this runs, the document works on calls but is invisible to
+     WhatsApp's semantic retrieval. Idempotent: it only ever touches `embedding is null`. */
+  await boss.createQueue("embed-backfill");
+  await boss.work("embed-backfill", { batchSize: 1 }, async ([job]) => {
+    const { documentId } = job.data as { documentId?: string };
+
+    let q = supabaseAdmin.from("doc_chunks").select("id, content").is("embedding", null).limit(200);
+    if (documentId) q = q.eq("document_id", documentId);
+    const { data: pending } = await q;
+    if (!pending?.length) return;
+
+    for (let i = 0; i < pending.length; i += 32) {
+      const slice = pending.slice(i, i + 32);
+      const vectors = await embed(slice.map((s: any) => s.content), "document");
+      await Promise.all(
+        slice.map((s: any, j: number) =>
+          supabaseAdmin.from("doc_chunks").update({ embedding: vectors[j] }).eq("id", s.id)
+        )
+      );
+    }
+    console.log(`Backfilled embeddings for ${pending.length} chunk(s)`);
   });
 }
