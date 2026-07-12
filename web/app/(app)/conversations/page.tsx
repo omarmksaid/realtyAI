@@ -111,7 +111,11 @@ export default function Conversations() {
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
               <span><b>{r.lead}</b> <span style={{ color: "var(--muted)", fontSize: 13 }}>· {r.project}</span></span>
               <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span className="chip chip-lang">{r.channel === "call" ? "Call" : r.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
+                {/* "call" was never a real channel value — the voice adapter emits "voice",
+                    so a phone call used to fall through and get labelled "Email". */}
+                <span className="chip chip-lang">
+                  {r.channel === "voice" ? "📞 Phone call" : r.channel === "whatsapp" ? "💬 WhatsApp" : "✉️ Email"}
+                </span>
                 {r.recording && <span className="chip chip-ai">▶ Recording</span>}
                 <span style={{ color: "var(--muted)", fontSize: 13 }}>{r.at}</span>
               </span>

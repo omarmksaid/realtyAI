@@ -13,6 +13,8 @@ export interface LeadRow {
 export interface Turn {
   id: string; role: "lead" | "ai" | "agent" | "system";
   text: string; gloss?: string; at: string;
+  /** Where this turn happened — whatsapp | voice | email. A lead's thread mixes channels. */
+  channel?: string;
 }
 
 export const demoDigest = {

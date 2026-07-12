@@ -47,7 +47,17 @@ function mapLead(r: any): LeadRow {
   };
 }
 
-function mapTurn(m: any): Turn {
+/** A lead's whole history is one thread, but the turns in it did not all happen in the same
+ *  place — a call transcript rendered in chat bubbles reads as if the lead texted it. Each
+ *  turn carries the channel it actually occurred on so the thread can say so. */
+const CHANNEL_META: Record<string, { label: string; icon: string }> = {
+  whatsapp: { label: "WhatsApp", icon: "💬" },
+  voice: { label: "Phone call", icon: "📞" },
+  email: { label: "Email", icon: "✉️" },
+};
+const channelMeta = (ch?: string) => CHANNEL_META[ch ?? ""] ?? { label: ch ?? "Message", icon: "•" };
+
+function mapTurn(m: any, channel?: string): Turn {
   let role: Turn["role"] = "ai";
   if (m.direction === "inbound") role = "lead";
   else if (m.sender_type === "agent" || m.sender_type === "human") role = "agent";
@@ -56,6 +66,7 @@ function mapTurn(m: any): Turn {
   return {
     id: m.id,
     role,
+    channel,
     text: m.content || m.body || m.text || "",
     gloss: m.gloss || undefined,
     at: m.created_at
@@ -76,6 +87,7 @@ export default function Conversation() {
   const [convId, setConvId] = useState<string | null>(null);
   const [leadRaw, setLeadRaw] = useState<any>(null);
   const [calls, setCalls] = useState<CallRow[]>([]);
+  const [convChannels, setConvChannels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (isDemo) return;
@@ -129,8 +141,13 @@ export default function Conversation() {
               .order("created_at", { ascending: true }),
           ]);
 
+          // Messages don't carry a channel — their conversation does. Resolve it per turn.
+          const channelByConv: Record<string, string> = {};
+          for (const c of convos) channelByConv[c.id] = c.channel;
+          if (!cancelled) setConvChannels(channelByConv);
+
           if (msgs && !cancelled) {
-            setTurns(msgs.map(mapTurn));
+            setTurns(msgs.map((m: any) => mapTurn(m, channelByConv[m.conversation_id])));
           }
           if (callRows && !cancelled) {
             setCalls((callRows as CallRow[]).filter((r) => r.recording_url));
@@ -161,7 +178,7 @@ export default function Conversation() {
           setTurns((prev) => {
             // Avoid duplicates
             if (prev.some((t) => t.id === msg.id)) return prev;
-            return [...prev, mapTurn(msg)];
+            return [...prev, mapTurn(msg, convChannels[msg.conversation_id])];
           });
         }
       )
@@ -170,7 +187,7 @@ export default function Conversation() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [convId]);
+  }, [convId, convChannels]);
 
   async function takeOver() {
     if (!isDemo) {
@@ -257,7 +274,14 @@ export default function Conversation() {
     <>
       <h1 className="page-title">{lead.name}</h1>
       <p className="page-sub">
-        {lead.project} · WhatsApp · <span className="chip chip-lang">{lead.langLabel}</span>
+        {lead.project} ·{" "}
+        {(Array.from(new Set(Object.values(convChannels))).length
+          ? Array.from(new Set(Object.values(convChannels)))
+          : ["whatsapp"]
+        )
+          .map((ch) => `${channelMeta(ch).icon} ${channelMeta(ch).label}`)
+          .join(" + ")}{" "}
+        · <span className="chip chip-lang">{lead.langLabel}</span>
       </p>
 
       <div className="card card-pad" style={{ marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px 24px" }}>
@@ -323,19 +347,40 @@ export default function Conversation() {
         </div>
 
         <div className="thread" style={{ flex: 1, overflowY: "auto" }}>
-          {turns.map((t) =>
-            t.role === "system" ? (
-              <div key={t.id} className="sysline">{t.text}</div>
-            ) : (
-              <div key={t.id}
-                className={`bubble ${t.role === "lead" ? "bubble-lead" : t.role === "agent" ? "bubble-agent" : "bubble-ai"}`}
-                dir={t.role !== "agent" && lead.language === "fa" ? "auto" : undefined}>
-                {t.text}
-                {t.gloss && <span className="gloss">{t.gloss}</span>}
-                <time>{t.role === "agent" ? "You" : t.role === "ai" ? "AI" : lead.name.split(" ")[0]} · {t.at}</time>
+          {turns.map((t, i) => {
+            if (t.role === "system") return <div key={t.id} className="sysline">{t.text}</div>;
+
+            // The thread mixes channels. Mark where it switches, so a spoken call transcript
+            // is never mistaken for a chat the lead typed.
+            const prev = turns[i - 1];
+            const switched = t.channel && t.channel !== prev?.channel;
+            const meta = channelMeta(t.channel);
+            const spoken = t.channel === "voice";
+
+            return (
+              <div key={t.id}>
+                {switched && (
+                  <div className="sysline" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>{meta.icon}</span>
+                    <span>{spoken ? "Spoken on a phone call" : `On ${meta.label}`}</span>
+                  </div>
+                )}
+                <div
+                  className={`bubble ${t.role === "lead" ? "bubble-lead" : t.role === "agent" ? "bubble-agent" : "bubble-ai"}`}
+                  style={spoken ? { fontStyle: "italic" } : undefined}
+                  dir={t.role !== "agent" && lead.language === "fa" ? "auto" : undefined}
+                >
+                  {t.text}
+                  {t.gloss && <span className="gloss">{t.gloss}</span>}
+                  <time>
+                    {t.role === "agent" ? "You" : t.role === "ai" ? "AI" : lead.name.split(" ")[0]}
+                    {" · "}{meta.icon} {spoken ? "said" : meta.label}
+                    {" · "}{t.at}
+                  </time>
+                </div>
               </div>
-            )
-          )}
+            );
+          })}
         </div>
 
         <div style={{ flexShrink: 0, borderTop: "1px solid var(--line)" }}>
@@ -343,7 +388,7 @@ export default function Conversation() {
             <div className="composer">
               <input
                 value={draft}
-                placeholder={`Message ${lead.name.split(" ")[0]} — sends from the brokerage's WhatsApp number`}
+                placeholder={`Message ${lead.name.split(" ")[0]} on WhatsApp — sends from the brokerage's number`}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && send()}
               />
