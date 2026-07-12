@@ -12,6 +12,21 @@ const langLabels: Record<string, string> = {
   fr: "Fran\u00E7ais \u00B7 French",
 };
 
+interface CallRow {
+  id: string;
+  recording_url: string | null;
+  duration_sec: number | null;
+  outcome: string | null;
+  created_at: string | null;
+}
+
+function formatDuration(sec: number | null): string {
+  if (!sec) return "";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 function mapLead(r: any): LeadRow {
   const lang = r.detected_language || "en";
   const score: Score = r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : "cold";
@@ -60,6 +75,7 @@ export default function Conversation() {
   const [loading, setLoading] = useState(!isDemo);
   const [convId, setConvId] = useState<string | null>(null);
   const [leadRaw, setLeadRaw] = useState<any>(null);
+  const [calls, setCalls] = useState<CallRow[]>([]);
 
   useEffect(() => {
     if (isDemo) return;
@@ -99,14 +115,25 @@ export default function Conversation() {
 
           // Fetch messages from ALL conversations for this lead
           const allConvIds = convos.map(c => c.id);
-          const { data: msgs } = await supabase
-            .from("messages")
-            .select("*")
-            .in("conversation_id", allConvIds)
-            .order("created_at", { ascending: true });
+          const [{ data: msgs }, { data: callRows }] = await Promise.all([
+            supabase
+              .from("messages")
+              .select("*")
+              .in("conversation_id", allConvIds)
+              .order("created_at", { ascending: true }),
+            // AI voice calls: the recording lives on the calls row, not on a message.
+            supabase
+              .from("calls")
+              .select("id, recording_url, duration_sec, outcome, created_at")
+              .in("conversation_id", allConvIds)
+              .order("created_at", { ascending: true }),
+          ]);
 
           if (msgs && !cancelled) {
             setTurns(msgs.map(mapTurn));
+          }
+          if (callRows && !cancelled) {
+            setCalls((callRows as CallRow[]).filter((r) => r.recording_url));
           }
         }
       } catch {
@@ -259,6 +286,26 @@ export default function Conversation() {
           <span style={{ fontSize: 14, color: "var(--muted)" }}>{lead.receivedAt}</span>
         </div>
       </div>
+
+      {calls.length > 0 && (
+        <div className="card card-pad" style={{ marginBottom: 16 }}>
+          <p className="section-label">{calls.length > 1 ? "Call recordings" : "Call recording"}</p>
+          {calls.map((call) => (
+            <div key={call.id} style={{ marginTop: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, fontSize: 13, color: "var(--muted)" }}>
+                <span>
+                  {call.created_at
+                    ? new Date(call.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+                    : "AI call"}
+                </span>
+                {call.duration_sec ? <span>· {formatDuration(call.duration_sec)}</span> : null}
+                {call.outcome ? <span>· {call.outcome.replace(/-/g, " ")}</span> : null}
+              </div>
+              <audio controls preload="none" src={call.recording_url!} style={{ width: "100%" }} />
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="card" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 340px)", minHeight: 400 }}>
         <div className="takeover-bar" style={{ flexShrink: 0 }}>

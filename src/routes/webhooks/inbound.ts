@@ -6,6 +6,7 @@ import { generateReply } from "../../ai/conversation";
 import { getChannel } from "../../channels/types";
 import { boss } from "../../jobs/queue";
 import Anthropic from "@anthropic-ai/sdk";
+import { DateTime } from "luxon";
 
 const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
@@ -202,16 +203,116 @@ inboundWebhooks.post("/vapi", async (c) => {
       meta: { minutes: +mins.toFixed(2), source: actual != null ? "vapi_actual" : "estimate" },
     });
   }
-  // Store transcript turns as messages so the dashboard renders every channel the same way
-  for (const turn of message.artifact?.messages ?? []) {
-    if (turn.role !== "user" && turn.role !== "bot") continue;
+  // Store transcript turns as messages so the dashboard renders every channel the same way.
+  // Voice is told not to emit control tags (they'd be read aloud), but strip them anyway —
+  // a leaked tag must never reach the dashboard as if it were speech.
+  const turns = (message.artifact?.messages ?? []).filter(
+    (t: any) => t.role === "user" || t.role === "bot"
+  );
+  for (const turn of turns) {
     await supabaseAdmin.from("messages").insert({
       company_id: convo.company_id, conversation_id: convo.id,
       direction: turn.role === "user" ? "inbound" : "outbound",
       role: turn.role === "user" ? "lead" : "ai",
-      content: turn.message, meta: { seconds: turn.secondsFromStart },
+      content: stripControlTags(turn.message), meta: { seconds: turn.secondsFromStart },
     });
   }
   await supabaseAdmin.from("conversations").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", convo.id);
+
+  // A call has no per-turn hook to parse [HANDOFF]/[CALLBACK:] out of, so recover the
+  // same intent from the finished transcript instead. Non-blocking: the transcript is
+  // already saved, and a failure here must not make Vapi retry the whole webhook.
+  extractCallIntent(convo.id, convo.company_id, turns).catch((e) =>
+    console.error("Post-call intent extraction failed (non-blocking):", e)
+  );
+
   return c.html("<Response></Response>", 200, { "Content-Type": "text/xml" });
 });
+
+const stripControlTags = (s: string) =>
+  (s ?? "").replace(/\[HANDOFF\]|\[OPTOUT\]|\[CALLBACK:[^\]]*\]/gi, "").trim();
+
+/** Read a finished call transcript and record what was actually agreed: a callback time,
+ *  a handoff, or an opt-out. Mirrors what generateReply's tag-parsing does for text. */
+async function extractCallIntent(
+  conversationId: string,
+  companyId: string,
+  turns: Array<{ role: string; message: string }>
+) {
+  if (!turns.length) return;
+
+  const { data: convo } = await supabaseAdmin
+    .from("conversations")
+    .select("lead_id, leads(full_name, phone)")
+    .eq("id", conversationId).single();
+  if (!convo?.lead_id) return;
+
+  const { data: company } = await supabaseAdmin
+    .from("companies").select("timezone").eq("id", companyId).single();
+  const tz = company?.timezone ?? "America/Toronto";
+  const now = DateTime.now().setZone(tz);
+
+  const transcript = turns
+    .map((t) => `${t.role === "user" ? "Lead" : "Agent"}: ${stripControlTags(t.message)}`)
+    .join("\n");
+
+  const res = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 300,
+    system:
+      `You extract outcomes from a finished phone call between a real estate assistant and a lead.\n` +
+      `The call happened at ${now.toFormat("cccc, MMMM d, yyyy h:mm a")} (${tz}). Resolve relative times ` +
+      `like "tomorrow at 9" against that, in that timezone.\n` +
+      `Return ONLY JSON: {"callback":"YYYY-MM-DDTHH:mm"|null,"handoff":true|false,"optout":true|false,"notes":string}\n` +
+      `callback: set only if the lead agreed to a specific time to be contacted.\n` +
+      `handoff: true if they want a human, are ready to transact, or are frustrated.\n` +
+      `optout: true only if they asked not to be contacted again.`,
+    messages: [{ role: "user", content: transcript }],
+  });
+
+  const raw = res.content.find((b) => b.type === "text");
+  if (!raw || raw.type !== "text") return;
+  const match = raw.text.match(/\{[\s\S]*\}/);
+  if (!match) return;
+
+  let intent: { callback?: string | null; handoff?: boolean; optout?: boolean; notes?: string };
+  try {
+    intent = JSON.parse(match[0]);
+  } catch {
+    return;
+  }
+
+  const lead = convo.leads as any;
+
+  if (intent.callback) {
+    const requestedTime = DateTime.fromISO(intent.callback, { zone: tz });
+    // A model can still hallucinate a past date; a callback behind us is never right.
+    if (requestedTime.isValid && requestedTime > now) {
+      await supabaseAdmin.from("callbacks")
+        .update({ status: "cancelled" })
+        .eq("lead_id", convo.lead_id).eq("status", "pending");
+      await supabaseAdmin.from("callbacks").insert({
+        company_id: companyId,
+        lead_id: convo.lead_id,
+        conversation_id: conversationId,
+        requested_time: requestedTime.toUTC().toISO(),
+        lead_name: lead?.full_name ?? null,
+        phone: lead?.phone ?? null,
+        notes: intent.notes ?? null,
+        status: "pending",
+      });
+    } else {
+      console.error("Discarded call callback — not a valid future time:", intent.callback);
+    }
+  }
+
+  if (intent.optout) {
+    await supabaseAdmin.from("leads")
+      .update({ opted_out: true, status: "opted_out" }).eq("id", convo.lead_id);
+  } else if (intent.handoff || intent.callback) {
+    await supabaseAdmin.from("conversations")
+      .update({ status: "handed_off" }).eq("id", conversationId);
+    await supabaseAdmin.from("leads")
+      .update({ status: "handed_off" }).eq("id", convo.lead_id);
+  }
+}

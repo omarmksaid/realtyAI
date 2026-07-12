@@ -81,7 +81,8 @@ export default function Conversations() {
                 month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
               })
             : "",
-          recording: r.conversations?.channel === "call",
+          // The voice adapter registers as "voice"; "call" was never a real channel value.
+          recording: r.conversations?.channel === "voice",
         }))
       );
     } catch (e) {

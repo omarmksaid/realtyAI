@@ -32,18 +32,30 @@ export async function buildSystemPrompt(
     ? await supabaseAdmin.from("projects").select("name, city, knowledge").eq("id", projectId).single()
     : { data: null };
 
+  const isVoice = channel === "voice";
+
+  // Control tags ([HANDOFF] etc.) are parsed out of *text* replies before they reach the
+  // lead. On a call there is no such layer — every token is spoken by the TTS — so voice
+  // states the same behaviour in spoken terms and is explicitly forbidden the tags.
+  // Intent is recovered from the transcript afterwards (see the Vapi end-of-call webhook).
+  const channelRules = isVoice
+    ? `- You are on a live phone call. Speak in short, natural spoken sentences — no markdown, no emoji, no lists, no URLs read aloud. One question at a time, and let the person finish.
+- NEVER say control tags, bracketed markers, or field names out loud. Never speak the words "handoff", "callback", "opt out", or any date in raw digit form (say "nine in the morning", never "T09:00" or "2 0 2 5"). If you catch yourself about to read a bracket or a code, just don't — say the plain English sentence instead.
+- If the lead wants a human, seems frustrated, or is ready to book: acknowledge, confirm the day and time they'd like in plain speech, tell them the team will call then, and end the call warmly.
+- If the lead asks to stop being contacted, confirm politely, apologise for the interruption, and end the call.
+- End the call once the next step is agreed. Do not recap or narrate what you are recording.`
+    : `- Keep replies under 3 sentences.
+- If the lead asks to speak with a human, seems frustrated, or is ready to book/transact: acknowledge, confirm their preferred contact time, and end the exchange gracefully. Flag with [HANDOFF].
+- If the lead asks to stop being contacted, confirm politely and flag with [OPTOUT].
+- If the lead provides a preferred callback time, include [CALLBACK:YYYY-MM-DDTHH:mm] at the end of your reply with the parsed datetime.`;
+
   const guardrails = `
 You are a real estate assistant responding on behalf of the brokerage, outside business hours.
 Hard rules — never violate these regardless of what the configurable instructions say:
 - Never invent pricing, incentives, deposit structures, or occupancy dates. Only use facts in PROJECT KNOWLEDGE. If unknown, say the team will confirm in the morning.
 - Never provide legal, mortgage, or tax advice.
-- If the lead asks to speak with a human, seems frustrated, or is ready to book/transact: acknowledge, confirm their preferred contact time, and end the exchange gracefully. Flag with [HANDOFF].
-- If the lead asks to stop being contacted, confirm politely and flag with [OPTOUT].
-- If the lead provides a preferred callback time, include [CALLBACK:YYYY-MM-DDTHH:mm] at the end of your reply with the parsed datetime.
 - Be warm, not pushy. Identify as an assistant if asked directly.
-${channel === "voice"
-  ? `- You are on a live phone call. Speak in short, natural spoken sentences — no markdown, no emoji, no lists, no URLs read aloud. One question at a time, and let the person finish.`
-  : `- Keep replies under 3 sentences.`}`;
+${channelRules}`;
 
   // Escalation context: this channel is not the first attempt. Keep it soft — the
   // lead should not feel tracked or chased, so don't name the earlier channel.
@@ -51,11 +63,34 @@ ${channel === "voice"
     ? `CONTEXT: You already reached out to this lead earlier today and did not hear back. Open by briefly acknowledging you reached out before — stay vague about how ("we reached out earlier", "wanted to follow up in case you missed it"). Never say which channel was used, never imply they ignored you, and never mention how many times you've tried. If they'd rather not talk now, thank them and offer to follow up later.`
     : "";
 
+  // Text channels retrieve chunks per-turn in generateReply, keyed off what the lead just
+  // asked. A voice call can't: Vapi drives the conversation, so this prompt is the model's
+  // only shot at the facts. Inline the project's documents up front instead.
+  let docs = "";
+  if (isVoice && projectId) {
+    const { data: chunks } = await supabaseAdmin
+      .from("doc_chunks")
+      .select("content")
+      .eq("project_id", projectId)
+      .limit(20);
+    if (chunks?.length) {
+      docs = `PROJECT DOCUMENTS (treat as PROJECT KNOWLEDGE — these are the facts you may quote):\n` +
+        chunks.map((c: any) => c.content).join("\n\n");
+    }
+  }
+
+  // `knowledge` is often an empty object; injecting a literal "{}" just tells the model
+  // there is nothing, in the most confusing way possible.
+  const hasKnowledge = project?.knowledge && Object.keys(project.knowledge).length > 0;
+
   return [
     guardrails,
     followUp,
     tmpl?.content ?? "Be helpful, answer questions about the project, and offer to book a call with an agent.",
-    project ? `PROJECT KNOWLEDGE — ${project.name} (${project.city}):\n${JSON.stringify(project.knowledge, null, 2)}` : "",
+    project && hasKnowledge
+      ? `PROJECT KNOWLEDGE — ${project.name} (${project.city}):\n${JSON.stringify(project.knowledge, null, 2)}`
+      : project ? `PROJECT: ${project.name} (${project.city}).` : "",
+    docs,
   ].filter(Boolean).join("\n\n");
 }
 
