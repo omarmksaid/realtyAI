@@ -24,7 +24,10 @@ const JWKS = createRemoteJWKSet(
 // Fallback: HMAC secret for HS256 (older Supabase projects)
 const hmacSecret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
 
-async function verifyJwt(token: string): Promise<{ sub: string; email?: string }> {
+/** Exported so acceptInvite can use it too. It used to keep its own HMAC-only copy, which
+ *  always failed on an ES256 Supabase project — every invite acceptance returned
+ *  "invalid token". One verifier, one place to fix. */
+export async function verifyJwt(token: string): Promise<{ sub: string; email?: string }> {
   // Try JWKS (ES256) first
   try {
     const { payload } = await jwtVerify(token, JWKS);

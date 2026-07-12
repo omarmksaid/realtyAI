@@ -65,7 +65,9 @@ STUBBED / TODO (priority order):
 ## Commands
 Backend: `npm install && npm run dev` (tsx watch) · build: `npm run build && npm start`
 Web: `cd web && npm install && npm run dev` — runs on demo data with zero config.
-Migrations: run `supabase/migrations/0001..0009` in order, then `supabase/seed.example.sql`.
+Migrations: `0001..0011` are ALL APPLIED to production — do not re-run them against it.
+They exist to stand up a NEW database (staging, local, disaster recovery): run them in
+order, then `supabase/seed.example.sql`. New schema changes get a new numbered file.
 
 ## Gotchas
 - pg-boss lives in the same Postgres — DATABASE_URL must be the Supabase pooler string.

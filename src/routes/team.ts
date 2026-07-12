@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { randomBytes } from "node:crypto";
-import { jwtVerify } from "jose";
 import { Resend } from "resend";
 import twilio from "twilio";
 import { supabaseAdmin } from "../lib/supabase";
+import { verifyJwt } from "../lib/auth";
 import { env } from "../lib/env";
 
 const resend = new Resend(env.RESEND_API_KEY);
@@ -63,11 +63,15 @@ teamRoutes.post("/invites/resend", async (c) => {
   const { email } = await c.req.json();
   if (!email) return c.json({ error: "email required" }, 400);
 
-  const { data: invite } = await supabaseAdmin
+  // Not .maybeSingle(): inviting the same email twice leaves two pending rows, and
+  // maybeSingle THROWS on multiple matches — resend then reported "no pending invite"
+  // for an invite that plainly existed. Take the newest.
+  const { data: invites } = await supabaseAdmin
     .from("invites").select("id")
     .eq("company_id", companyId).eq("email", email).is("accepted_at", null)
-    .maybeSingle();
-  if (!invite) return c.json({ error: "no pending invite for that email" }, 404);
+    .order("created_at", { ascending: false }).limit(1);
+  const invite = invites?.[0];
+  if (!invite) return c.json({ error: "No pending invite for that email." }, 404);
 
   const token = randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
@@ -106,34 +110,37 @@ teamRoutes.patch("/members/:userId", async (c) => {
 });
 
 /* ============ Public accept (JWT-verified, but no membership yet — that's the point) ============ */
-const teamHmacSecret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
-
-async function verifyTeamJwt(token: string): Promise<{ sub: string; email: string }> {
-  try {
-    const { payload } = await jwtVerify(token, teamHmacSecret, { audience: "authenticated" });
-    return { sub: payload.sub as string, email: (payload as any).email ?? "" };
-  } catch {}
-  try {
-    const { payload } = await jwtVerify(token, teamHmacSecret);
-    return { sub: payload.sub as string, email: (payload as any).email ?? "" };
-  } catch (err) { throw err; }
-}
 
 export async function acceptInvite(c: any) {
   const header = c.req.header("authorization") ?? "";
   const jwt = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!jwt) return c.json({ error: "sign up first, then accept with your session token" }, 401);
+  if (!jwt) return c.json({ error: "Sign up first, then accept with your session." }, 401);
+
   let userId: string, userEmail: string;
   try {
-    const result = await verifyTeamJwt(jwt);
-    userId = result.sub; userEmail = result.email;
-  } catch { return c.json({ error: "invalid token" }, 401); }
+    // verifyJwt from lib/auth tries JWKS (ES256) before falling back to HMAC. This file
+    // used to carry its own HMAC-only copy, so on an ES256 Supabase project every accept
+    // failed with "invalid token" — the sign-up succeeded and the membership never landed.
+    const result = await verifyJwt(jwt);
+    userId = result.sub;
+    userEmail = result.email ?? "";
+  } catch {
+    return c.json({ error: "Your sign-in session isn't valid. Please try again." }, 401);
+  }
 
   const { token, phone, on_call } = await c.req.json();
-  const { data: invite } = await supabaseAdmin
+  if (!token) return c.json({ error: "This invite link is missing its token." }, 400);
+
+  // Not .single(): a duplicate invite for the same email would make it throw. Take the
+  // newest valid one.
+  const { data: invites } = await supabaseAdmin
     .from("invites").select("*").eq("token", token)
-    .is("accepted_at", null).gt("expires_at", new Date().toISOString()).single();
-  if (!invite) return c.json({ error: "invite invalid or expired" }, 400);
+    .is("accepted_at", null).gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false }).limit(1);
+  const invite = invites?.[0];
+  if (!invite) {
+    return c.json({ error: "This invite link has expired or already been used. Ask for a new one." }, 400);
+  }
 
   await supabaseAdmin.from("memberships").upsert({
     user_id: userId, company_id: invite.company_id, role: invite.role,
