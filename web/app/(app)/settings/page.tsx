@@ -27,6 +27,7 @@ export default function Settings() {
   const [members, setMembers] = useState<Member[]>(isDemo ? demoMembers : []);
   const [pending, setPending] = useState<Invite[]>(isDemo ? demoPending : []);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [busyInvite, setBusyInvite] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [spend, setSpend] = useState<Record<string, number>>({});
@@ -144,18 +145,76 @@ export default function Settings() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: inviteEmail.trim() }),
         });
-        if (res.ok) {
-          setPending((p) => [...p, { email: inviteEmail.trim(), role: "agent", expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }]);
-          setInviteEmail("");
+        if (!res.ok) {
+          console.error("Failed to send invite:", res.status, await res.text());
+          alert("Couldn't send that invite. Please try again.");
+          setInviting(false);
+          return;
         }
+        setPending((p) => [...p, { email: inviteEmail.trim(), role: "agent", expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }]);
+        setInviteEmail("");
       } catch (e) {
         console.error("Failed to send invite", e);
+        alert("Couldn't send that invite. Please try again.");
       }
     } else {
       setPending((p) => [...p, { email: inviteEmail.trim(), role: "agent", expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }]);
       setInviteEmail("");
     }
     setInviting(false);
+  }
+
+  /** Resend mints a fresh token server-side and pushes the expiry out — the old link is
+   *  usually dead, which is why someone is resending in the first place. */
+  async function resendInvite(email: string) {
+    if (isDemo) return;
+    setBusyInvite(email);
+    try {
+      const res = await apiFetch("/team/invites/resend", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        console.error("Failed to resend invite:", res.status, await res.text());
+        alert("Couldn't resend that invite. Please try again.");
+        return;
+      }
+      setPending((p) =>
+        p.map((i) =>
+          i.email === email
+            ? { ...i, expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }
+            : i
+        )
+      );
+      alert(`Invite re-sent to ${email}.`);
+    } catch (e) {
+      console.error("Failed to resend invite", e);
+      alert("Couldn't resend that invite. Please try again.");
+    } finally {
+      setBusyInvite(null);
+    }
+  }
+
+  async function revokeInvite(email: string) {
+    if (isDemo) return;
+    if (!confirm(`Revoke the invite for ${email}? Their link will stop working.`)) return;
+    setBusyInvite(email);
+    try {
+      const res = await apiFetch(`/team/invites?email=${encodeURIComponent(email)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        console.error("Failed to revoke invite:", res.status, await res.text());
+        alert("Couldn't revoke that invite. Please try again.");
+        return;
+      }
+      setPending((p) => p.filter((i) => i.email !== email));
+    } catch (e) {
+      console.error("Failed to revoke invite", e);
+      alert("Couldn't revoke that invite. Please try again.");
+    } finally {
+      setBusyInvite(null);
+    }
   }
 
   function formatPhone(phone: string | null) {
@@ -217,12 +276,38 @@ export default function Settings() {
             </span>
           </div>
         ))}
-        {pending.map((inv) => (
-          <div className="doc-row" key={inv.email}>
-            <span style={{ color: "var(--muted)" }}>{inv.email} <span style={{ fontSize: 13 }}>· invite sent, expires in {daysUntil(inv.expires_at)}</span></span>
-            <span className="chip chip-warm">Pending</span>
-          </div>
-        ))}
+        {pending.map((inv) => {
+          const expired = new Date(inv.expires_at).getTime() < Date.now();
+          return (
+            <div className="doc-row" key={inv.email} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span style={{ color: "var(--muted)" }}>
+                {inv.email}{" "}
+                <span style={{ fontSize: 13 }}>
+                  {expired ? "· invite expired" : `· invite sent, expires in ${daysUntil(inv.expires_at)}`}
+                </span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className={`chip ${expired ? "chip-cold" : "chip-warm"}`}>
+                  {expired ? "Expired" : "Pending"}
+                </span>
+                {!isDemo && (
+                  <>
+                    <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px" }}
+                      disabled={busyInvite === inv.email}
+                      onClick={() => resendInvite(inv.email)}>
+                      {busyInvite === inv.email ? "Sending…" : "Resend"}
+                    </button>
+                    <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", color: "#c33" }}
+                      disabled={busyInvite === inv.email}
+                      onClick={() => revokeInvite(inv.email)}>
+                      Revoke
+                    </button>
+                  </>
+                )}
+              </span>
+            </div>
+          );
+        })}
         <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
           <input placeholder="teammate@company.com" style={{ flex: 1 }} value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendInvite()} />
           <button className="btn btn-primary" disabled={inviting} onClick={sendInvite}>{inviting ? "Sending…" : "Send invite"}</button>

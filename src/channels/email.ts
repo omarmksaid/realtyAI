@@ -23,14 +23,14 @@ export const emailAdapter: ChannelAdapter = {
       const footer =
         `\n\n—\n${env.BROKERAGE_NAME} · ${env.BROKERAGE_ADDRESS}\n` +
         `You're receiving this because you requested info via our ad. ` +
-        `Reply STOP or click here to unsubscribe: ${env.APP_URL}/u/${ctx.lead.id}`;
+        `Reply STOP or click here to unsubscribe: ${env.WEB_URL}/u/${ctx.lead.id}`;
 
       const { data, error } = await resend.emails.send({
         from: env.EMAIL_FROM, // e.g. "Yasmin at BrokerageName <hello@yourdomain.com>"
         to: ctx.lead.email!,
         subject: `${ctx.projectName} — the info you asked for`,
         text: body + footer,
-        headers: { "List-Unsubscribe": `<${env.APP_URL}/u/${ctx.lead.id}>` },
+        headers: { "List-Unsubscribe": `<${env.WEB_URL}/u/${ctx.lead.id}>` },
       });
       if (error) return { ok: false, error: error.message };
       const { recordCost, RATES } = await import("../lib/costs");

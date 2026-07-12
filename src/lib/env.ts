@@ -7,7 +7,14 @@ function req(name: string): string {
 }
 
 export const env = {
+  /** This API's own public origin. Providers call back here (Twilio, Google, Vapi), and
+   *  Twilio signature validation hashes it — it must stay the API, not the dashboard. */
   APP_URL: req("APP_URL"),
+  /** The dashboard's origin. Anything a *person* clicks — invite links, on-call SMS,
+   *  unsubscribe — lives in the Next.js app, not here. These used to be built from APP_URL,
+   *  so every one of them landed on the API and 404'd. Falls back to APP_URL only so a
+   *  missing var doesn't crash boot; set it in Railway. */
+  WEB_URL: process.env.WEB_URL || req("APP_URL"),
   DATABASE_URL: req("DATABASE_URL"),               // Supabase pooler connection string
   SUPABASE_URL: req("SUPABASE_URL"),
   SUPABASE_SERVICE_ROLE_KEY: req("SUPABASE_SERVICE_ROLE_KEY"),

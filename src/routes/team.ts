@@ -16,29 +16,78 @@ teamRoutes.get("/", async (c) => {
   const { data } = await supabaseAdmin
     .from("memberships").select("user_id, email, role, phone, on_call")
     .eq("company_id", c.get("companyId"));
+  // Include expired invites. Filtering them out hid exactly the ones worth acting on —
+  // you can't resend an invite you can't see. The UI marks them expired instead.
   const { data: pending } = await supabaseAdmin
     .from("invites").select("email, role, expires_at")
-    .eq("company_id", c.get("companyId")).is("accepted_at", null).gt("expires_at", new Date().toISOString());
+    .eq("company_id", c.get("companyId")).is("accepted_at", null);
   return c.json({ members: data ?? [], pending: pending ?? [] });
 });
+
+/** The invite email. WEB_URL, not APP_URL — /join is a page in the dashboard; built from
+ *  APP_URL it pointed at this API, which has no such route, and every invite 404'd. */
+async function sendInviteEmail(companyId: any, email: string, token: string) {
+  const { data: co } = await supabaseAdmin
+    .from("companies").select("name").eq("id", companyId).single();
+  const link = `${env.WEB_URL}/join?token=${token}`;
+  await resend.emails.send({
+    from: env.EMAIL_FROM, to: email,
+    subject: `Join ${co?.name} on realtyAI`,
+    text: `You've been invited to ${co?.name}'s realtyAI workspace.\n\nAccept here (link expires in 7 days):\n${link}\n\nDuring signup you can add your mobile number to receive hot-lead texts when you're on call.`,
+  });
+}
 
 /** Invite by email: creates a one-time link and sends it via Resend. Admin only. */
 teamRoutes.post("/invites", async (c) => {
   if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
   const companyId = c.get("companyId");
   const { email, role } = await c.req.json();
+  if (!email) return c.json({ error: "email required" }, 400);
 
   const token = randomBytes(24).toString("base64url");
-  await supabaseAdmin.from("invites").insert({
+  const { error } = await supabaseAdmin.from("invites").insert({
     company_id: companyId, email, role: role ?? "agent", token, invited_by: c.get("userId"),
   });
-  const { data: co } = await supabaseAdmin.from("companies").select("name").eq("id", companyId).single();
-  const link = `${env.APP_URL}/join?token=${token}`;
-  await resend.emails.send({
-    from: env.EMAIL_FROM, to: email,
-    subject: `Join ${co?.name} on realtyAI`,
-    text: `You've been invited to ${co?.name}'s realtyAI workspace.\n\nAccept here (link expires in 7 days):\n${link}\n\nDuring signup you can add your mobile number to receive hot-lead texts when you're on call.`,
-  });
+  if (error) return c.json({ error: error.message }, 500);
+
+  await sendInviteEmail(companyId, email, token);
+  return c.json({ ok: true });
+});
+
+/** Resend a pending invite. Mints a fresh token and pushes the expiry out — the usual
+ *  reason to resend is that the old link expired or never arrived, so reusing the dead
+ *  token would just fail again. */
+teamRoutes.post("/invites/resend", async (c) => {
+  if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
+  const companyId = c.get("companyId");
+  const { email } = await c.req.json();
+  if (!email) return c.json({ error: "email required" }, 400);
+
+  const { data: invite } = await supabaseAdmin
+    .from("invites").select("id")
+    .eq("company_id", companyId).eq("email", email).is("accepted_at", null)
+    .maybeSingle();
+  if (!invite) return c.json({ error: "no pending invite for that email" }, 404);
+
+  const token = randomBytes(24).toString("base64url");
+  const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
+  const { error } = await supabaseAdmin.from("invites")
+    .update({ token, expires_at: expiresAt }).eq("id", invite.id);
+  if (error) return c.json({ error: error.message }, 500);
+
+  await sendInviteEmail(companyId, email, token);
+  return c.json({ ok: true });
+});
+
+/** Revoke a pending invite. */
+teamRoutes.delete("/invites", async (c) => {
+  if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
+  const email = c.req.query("email");
+  if (!email) return c.json({ error: "email required" }, 400);
+
+  const { error } = await supabaseAdmin.from("invites").delete()
+    .eq("company_id", c.get("companyId")).eq("email", email).is("accepted_at", null);
+  if (error) return c.json({ error: error.message }, 500);
   return c.json({ ok: true });
 });
 
@@ -108,7 +157,7 @@ export async function notifyOnCall(companyId: string, leadId: string, leadName: 
     .eq("on_call", true).not("phone", "is", null);
   if (!onCall?.length) return;
 
-  const body = `realtyAI — hot lead: ${leadName} (${projectName}). ${reason} Open: ${env.APP_URL}/conversations/${leadId}`;
+  const body = `realtyAI — hot lead: ${leadName} (${projectName}). ${reason} Open: ${env.WEB_URL}/conversations/${leadId}`;
   for (const m of onCall) {
     try {
       await tw.messages.create({ to: m.phone!, from: env.TWILIO_WHATSAPP_NUMBER, body });
