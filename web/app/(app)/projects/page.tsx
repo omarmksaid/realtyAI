@@ -10,6 +10,11 @@ interface Project {
   docs: Doc[];
 }
 
+/** Keep in sync with MAX_UPLOAD_MB in src/routes/agent.ts — the API is what enforces it.
+ *  Bounded by the Anthropic 32MB request cap once the file is base64'd for extraction. */
+const MAX_UPLOAD_MB = 20;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1_000_000;
+
 const statusColor: Record<string, string> = { ready: "chip-ai", processing: "chip-warm" };
 const sourceIcon: Record<string, string> = { text: "Text", upload: "Upload" };
 
@@ -126,6 +131,18 @@ export default function Projects() {
   async function handleFileUpload(projectId: string, files: FileList | null) {
     if (!files || files.length === 0) return;
     if (isDemo) { alert("File upload requires Supabase connection"); return; }
+    // Check size client-side too — no point pushing 40MB up the wire just to be rejected.
+    // The API enforces the same limit; this is only for fast feedback.
+    const tooBig = Array.from(files).filter((f) => f.size > MAX_UPLOAD_BYTES);
+    if (tooBig.length) {
+      alert(
+        `${tooBig.map((f) => `${f.name} (${(f.size / 1e6).toFixed(1)}MB)`).join(", ")} — ` +
+        `over the ${MAX_UPLOAD_MB}MB limit. Split the file or export a smaller version.`
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     setUploading(true);
     const failed: string[] = [];
     try {
@@ -340,7 +357,7 @@ export default function Projects() {
 
               {tab === "upload" && (
                 <div style={{ border: "1.5px dashed var(--line)", borderRadius: 8, padding: "34px 20px", textAlign: "center", color: "var(--muted)" }}>
-                  {uploading ? "Uploading…" : "Drop floor plans, price lists, or renderings here — PDF, DOCX, PNG, JPG"}
+                  {uploading ? "Uploading…" : `Drop floor plans, price lists, or renderings here — PDF, DOCX, PNG, JPG · up to ${MAX_UPLOAD_MB}MB`}
                   <input type="file" multiple accept=".pdf,.docx,.png,.jpg,.jpeg" ref={fileInputRef} style={{ display: "none" }} onChange={(e) => handleFileUpload(p.id, e.target.files)} />
                   <div style={{ marginTop: 12 }}><button className="btn" disabled={uploading} onClick={() => fileInputRef.current?.click()}>Choose files</button></div>
                 </div>

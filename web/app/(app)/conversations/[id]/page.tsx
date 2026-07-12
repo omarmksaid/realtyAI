@@ -118,9 +118,11 @@ export default function Conversation() {
           .eq("lead_id", id);
 
         if (convos && convos.length > 0) {
-          // Prefer whatsapp conversation, fall back to first
-          const convData = convos.find(c => c.channel === "whatsapp") ?? convos[0];
-          if (!cancelled) {
+          // Takeover means "the AI stops replying and you type instead" — that only exists on
+          // a live text channel. A finished call has nothing to take over, so don't fall back
+          // to it: leave convId null and the composer/takeover bar stay hidden.
+          const convData = convos.find((c) => c.channel === "whatsapp");
+          if (!cancelled && convData) {
             setConvId(convData.id);
             setMode(convData.status === "handed_off" ? "human" : "ai");
           }
@@ -191,18 +193,9 @@ export default function Conversation() {
 
   async function takeOver() {
     if (!isDemo) {
+      if (!convId) return;
       try {
-        // Find conversation id for this lead
-        const supabase = createClient();
-        const { data: convData } = await supabase
-          .from("conversations")
-          .select("id")
-          .eq("lead_id", id)
-          .limit(1)
-          .single();
-        if (convData) {
-          await apiFetch(`/agent/conversations/${convData.id}/takeover`, { method: "POST" });
-        }
+        await apiFetch(`/agent/conversations/${convId}/takeover`, { method: "POST" });
       } catch {
         // proceed with local state update even if API fails
       }
@@ -216,17 +209,9 @@ export default function Conversation() {
 
   async function handBack() {
     if (!isDemo) {
+      if (!convId) return;
       try {
-        const supabase = createClient();
-        const { data: convData } = await supabase
-          .from("conversations")
-          .select("id")
-          .eq("lead_id", id)
-          .limit(1)
-          .single();
-        if (convData) {
-          await apiFetch(`/agent/conversations/${convData.id}/handback`, { method: "POST" });
-        }
+        await apiFetch(`/agent/conversations/${convId}/handback`, { method: "POST" });
       } catch {
         // proceed with local state update
       }
@@ -239,20 +224,12 @@ export default function Conversation() {
     if (!draft.trim()) return;
     const text = draft.trim();
     if (!isDemo) {
+      if (!convId) return;
       try {
-        const supabase = createClient();
-        const { data: convData } = await supabase
-          .from("conversations")
-          .select("id")
-          .eq("lead_id", id)
-          .limit(1)
-          .single();
-        if (convData) {
-          await apiFetch("/agent/messages", {
-            method: "POST",
-            body: JSON.stringify({ conversation_id: convData.id, text }),
-          });
-        }
+        await apiFetch("/agent/messages", {
+          method: "POST",
+          body: JSON.stringify({ conversation_id: convId, text }),
+        });
       } catch {
         // still show the message locally
       }
@@ -332,8 +309,16 @@ export default function Conversation() {
       )}
 
       <div className="card" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 340px)", minHeight: 400 }}>
+        {/* Taking over means the AI stops replying and you type instead — only possible on a
+            live text channel. A lead whose only conversation was a finished phone call has
+            nothing to take over, so show what happened rather than a button that does nothing. */}
         <div className="takeover-bar" style={{ flexShrink: 0 }}>
-          {mode === "ai" ? (
+          {!convId ? (
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>
+              📞 This lead was reached by phone. There&apos;s no live thread to take over — call them
+              back{leadRaw?.phone ? <> at <a href={`tel:${leadRaw.phone}`} style={{ color: "var(--accent-deep)", fontWeight: 600 }}>{leadRaw.phone}</a></> : null}.
+            </span>
+          ) : mode === "ai" ? (
             <>
               <span><span className="chip chip-ai">AI is handling this conversation</span></span>
               <button className="btn btn-primary" onClick={takeOver}>Take over</button>
@@ -384,7 +369,11 @@ export default function Conversation() {
         </div>
 
         <div style={{ flexShrink: 0, borderTop: "1px solid var(--line)" }}>
-          {mode === "human" ? (
+          {!convId ? (
+            <div style={{ padding: "10px 16px", color: "var(--muted)", fontSize: 13, textAlign: "center" }}>
+              Call transcript · read-only
+            </div>
+          ) : mode === "human" ? (
             <div className="composer">
               <input
                 value={draft}

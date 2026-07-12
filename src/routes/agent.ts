@@ -9,6 +9,15 @@ import { getChannel } from "../channels/types";
  */
 export const agentRoutes = new Hono();
 
+/** Ceiling on an uploaded knowledge file. The binding constraint is the Anthropic API,
+ *  which caps a request at 32MB — and we base64 the file, which inflates it ~33%. So a
+ *  PDF much over ~20MB can't be read at all; rejecting it here beats failing in the
+ *  ingest worker after the upload appeared to succeed. Real brochures are single-digit MB. */
+const MAX_UPLOAD_MB = 20;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1_000_000;
+/** What extractText() in the ingest worker actually knows how to read. */
+const ACCEPTED_UPLOAD = /\.(pdf|docx|png|jpe?g|webp|txt|md|csv)$/i;
+
 /* Take over: AI stops replying the moment this flips. The inbound webhook
    checks conversation.status — if 'handed_off', it stores the lead's message
    and notifies the agent instead of calling generateReply(). */
@@ -248,6 +257,15 @@ agentRoutes.post("/projects/:id/knowledge/upload", async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return c.json({
+      error: `File is ${(file.size / 1e6).toFixed(1)}MB. The limit is ${MAX_UPLOAD_MB}MB — split it or export a smaller version.`,
+    }, 413);
+  }
+  if (!ACCEPTED_UPLOAD.test(file.name ?? "")) {
+    return c.json({ error: "Unsupported file type. Upload a PDF, DOCX, PNG, JPG, or text file." }, 415);
+  }
 
   const name = file.name || "Uploaded file";
   const buf = Buffer.from(await file.arrayBuffer());
