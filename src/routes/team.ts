@@ -109,6 +109,29 @@ teamRoutes.patch("/members/:userId", async (c) => {
   return c.json({ ok: true });
 });
 
+/** Force-sign-out a user by deleting their auth sessions and refresh tokens.
+ *
+ *  The auth schema isn't reachable through PostgREST (supabaseAdmin), and this GoTrue build
+ *  exposes neither `DELETE /admin/users/{id}/sessions` nor `POST /admin/users/{id}/logout`
+ *  (both 404). supabase-js's `admin.signOut()` takes a JWT, not a user id, so it can't be
+ *  used from here either. Deleting the rows is what revocation actually is — the admin
+ *  endpoints are wrappers over the same thing.
+ *
+ *  The access token stays valid until it expires (~1h), but it can no longer be refreshed,
+ *  and it grants nothing regardless: requireAuth re-checks memberships every request and
+ *  RLS's my_company_ids() reads the table live. */
+async function revokeSessions(userId: string): Promise<void> {
+  const { Client } = await import("pg");
+  const client = new Client({ connectionString: env.DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query("delete from auth.refresh_tokens where user_id = $1", [userId]);
+    await client.query("delete from auth.sessions where user_id = $1", [userId]);
+  } finally {
+    await client.end();
+  }
+}
+
 /** Remove a member from the workspace. Owner/admin only.
  *
  *  This has to go through the API. memberships has SELECT and INSERT policies and NO
@@ -148,6 +171,28 @@ teamRoutes.delete("/members/:userId", async (c) => {
   const { error } = await supabaseAdmin.from("memberships")
     .delete().eq("company_id", companyId).eq("user_id", target);
   if (error) return c.json({ error: error.message }, 500);
+
+  // Revoke their Supabase session. Deleting the membership already cuts off access —
+  // requireAuth re-queries memberships on every request, and RLS's my_company_ids() reads it
+  // live — but their JWT stays valid, so without this they'd sit in the dashboard staring at
+  // empty pages instead of being returned to the login screen.
+  //
+  // Only when they have no memberships LEFT: a user can belong to more than one brokerage,
+  // and a global sign-out would eject them from workspaces they're still entitled to.
+  const { count: remaining } = await supabaseAdmin
+    .from("memberships").select("user_id", { count: "exact", head: true })
+    .eq("user_id", target);
+  if (!remaining) {
+    // supabase-js's admin.signOut() takes a JWT, not a user id, and this GoTrue build
+    // exposes no admin/users/{id}/sessions endpoint (404). Deleting the session rows IS
+    // the revocation — those endpoints are wrappers over exactly this.
+    // Non-fatal: access is already gone via memberships. Don't fail the revoke over it.
+    try {
+      await revokeSessions(target);
+    } catch (e: any) {
+      console.error("Membership removed, but session revocation failed for", target, e?.message);
+    }
+  }
 
   await supabaseAdmin.from("audit_log").insert({
     company_id: companyId, user_id: c.get("userId"),
