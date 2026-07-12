@@ -35,6 +35,16 @@ export async function startWorker() {
     const adapter = getChannel(channel);
     if (!adapter || !adapter.canReach(lead)) return;
 
+    // Channels already tried for this lead. A later channel in the escalation
+    // ladder uses this to acknowledge the earlier attempt rather than open cold.
+    const { data: priorConvos } = await supabaseAdmin
+      .from("conversations")
+      .select("channel")
+      .eq("lead_id", lead.id);
+    const priorChannels = (priorConvos ?? [])
+      .map((c: any) => c.channel)
+      .filter((c: string) => c !== channel);
+
     const { data: convo } = await supabaseAdmin
       .from("conversations")
       .insert({ company_id: lead.company_id, lead_id: lead.id, channel })
@@ -43,12 +53,12 @@ export async function startWorker() {
     const projectName = (lead.projects as any)?.name ?? "the project";
     // Voice gets the assembled system prompt as its assistant instructions
     const body = channel === "voice"
-      ? await buildSystemPrompt(lead.company_id, lead.project_id, "voice")
+      ? await buildSystemPrompt(lead.company_id, lead.project_id, "voice", { priorChannels })
       : undefined;
 
     const result = await adapter.send({
       lead, conversationId: convo!.id, projectName,
-      isFirstTouch: true, body,
+      isFirstTouch: true, body, priorChannels,
     });
 
     await supabaseAdmin.from("messages").insert({

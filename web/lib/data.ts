@@ -63,9 +63,9 @@ export const demoProjects = [
 ];
 
 export const demoRules = [
-  { id: "r1", label: "Weekday evening", window: "Weekdays · 5:00 PM – 10:00 PM", channels: ["WhatsApp", "AI call after 10 min", "Email"], active: true },
-  { id: "r2", label: "Late night", window: "Every day · 10:00 PM – 9:00 AM", channels: ["WhatsApp", "Email"], active: true },
-  { id: "r3", label: "Weekend day", window: "Weekends · 9:00 AM – 10:00 PM", channels: ["WhatsApp", "AI call after 10 min", "Email"], active: true },
+  { id: "r1", label: "Weekday evening", window: "Weekdays · 5:00 PM – 10:00 PM", channels: ["WhatsApp — right away", "AI call — after 10 min", "Email — after 20 min"], active: true, delayMin: 10 },
+  { id: "r2", label: "Late night", window: "Every day · 10:00 PM – 9:00 AM", channels: ["WhatsApp — right away", "Email — after 15 min"], active: true, delayMin: 15 },
+  { id: "r3", label: "Weekend day", window: "Weekends · 9:00 AM – 10:00 PM", channels: ["WhatsApp — right away", "AI call — after 10 min", "Email — after 20 min"], active: true, delayMin: 10 },
 ];
 
 export const demoStats = { newLeads: 9, engaged: 6, engagementRate: "67%", handoffs: 2 };

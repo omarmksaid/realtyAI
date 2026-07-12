@@ -6,8 +6,8 @@ import { createClient } from "@/lib/supabase";
 import { apiFetch, getCompanyId } from "@/lib/api";
 import Coverage from "./coverage";
 
-interface Rule { id: string; label: string; window: string; channels: string[]; active: boolean }
-interface RuleRaw { id: string; label: string; day_type: string; start_time: string; end_time: string; channels: string[]; is_active: boolean; priority: number }
+interface Rule { id: string; label: string; window: string; channels: string[]; active: boolean; delayMin: number }
+interface RuleRaw { id: string; label: string; day_type: string; start_time: string; end_time: string; channels: string[]; is_active: boolean; priority: number; followup_delay_min: number }
 interface PromptTemplate { id: string; name: string; channel: string; content: string; version: number; project_id: string | null }
 
 function formatWindow(dayType: string, start: string, end: string): string {
@@ -23,12 +23,16 @@ function formatWindow(dayType: string, start: string, end: string): string {
   return `${dayLabel} · ${fmt(start)} – ${fmt(end)}`;
 }
 
-function formatChannels(channels: string[]): string[] {
-  return channels.map((c) => {
-    if (c === "whatsapp") return "WhatsApp";
-    if (c === "voice") return "AI call after 10 min";
-    if (c === "email") return "Email";
-    return c;
+const CHANNEL_LABELS: Record<string, string> = { whatsapp: "WhatsApp", voice: "AI call", email: "Email" };
+
+/** Channels fire in order: the first immediately, each next one `delayMin` later
+ *  (and only if the lead hasn't replied yet). Show that timing, don't hardcode it. */
+function formatChannels(channels: string[], delayMin: number): string[] {
+  return channels.map((c, i) => {
+    const label = CHANNEL_LABELS[c] ?? c;
+    if (i === 0) return `${label} — right away`;
+    const mins = i * delayMin;
+    return mins === 0 ? `${label} — right away` : `${label} — after ${mins} min`;
   });
 }
 
@@ -53,14 +57,45 @@ export default function Playbooks() {
   const [showAddRule, setShowAddRule] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingPrompt, setSavingPrompt] = useState(false);
+  // Rule id currently being edited inline; null when the form is a "new rule" form.
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  // New rule form state
+  // Rule form state — shared by the add-new form and the inline edit form.
   const [newLabel, setNewLabel] = useState("");
   const [newDayType, setNewDayType] = useState("any");
   const [newStart, setNewStart] = useState("17:00");
   const [newEnd, setNewEnd] = useState("21:00");
   const [newChannels, setNewChannels] = useState<string[]>(["whatsapp", "email"]);
   const [newDelay, setNewDelay] = useState(15);
+
+  function resetForm() {
+    setNewLabel("");
+    setNewDayType("any");
+    setNewStart("17:00");
+    setNewEnd("21:00");
+    setNewChannels(["whatsapp", "email"]);
+    setNewDelay(15);
+  }
+
+  /** Open the inline editor pre-filled from the rule's stored values. */
+  function startEdit(id: string) {
+    const raw = rawRules.find((r) => r.id === id);
+    if (!raw) return;
+    setNewLabel(raw.label);
+    setNewDayType(raw.day_type);
+    setNewStart(raw.start_time.slice(0, 5)); // "17:00:00" -> "17:00"
+    setNewEnd(raw.end_time.slice(0, 5));
+    setNewChannels(raw.channels ?? []);
+    setNewDelay(raw.followup_delay_min ?? 0);
+    setEditingId(id);
+    setShowAddRule(false);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setShowAddRule(false);
+    resetForm();
+  }
 
   const fetchData = useCallback(async () => {
     if (isDemo) return;
@@ -91,8 +126,9 @@ export default function Playbooks() {
           id: r.id,
           label: r.label,
           window: formatWindow(r.day_type, r.start_time, r.end_time),
-          channels: formatChannels(r.channels ?? []),
+          channels: formatChannels(r.channels ?? [], r.followup_delay_min ?? 0),
           active: r.is_active,
+          delayMin: r.followup_delay_min ?? 0,
         })));
       }
 
@@ -110,37 +146,38 @@ export default function Playbooks() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  async function addRule() {
-    if (!newLabel.trim() || !newChannels.length) return;
+  /** Create a new rule, or update the one being edited. Channel order is the escalation
+   *  ladder (first fires immediately, each next one `followup_delay_min` later), so the
+   *  order the boxes are ticked in matters — see reorderChannels. */
+  async function saveRule() {
+    if (isDemo || !newLabel.trim() || !newChannels.length) return;
     setSaving(true);
     try {
       const supabase = createClient();
       const companyId = await getCompanyId();
       if (!companyId) return;
 
-      const maxPriority = rawRules.length ? Math.max(...rawRules.map(r => r.priority)) : 0;
-
-      const { error } = await supabase.from("routing_rules").insert({
-        company_id: companyId,
+      const fields = {
         label: newLabel.trim(),
         day_type: newDayType,
         start_time: newStart,
         end_time: newEnd,
         channels: newChannels,
         followup_delay_min: newDelay,
-        priority: maxPriority + 10,
-      });
+      };
+
+      const { error } = editingId
+        ? await supabase.from("routing_rules").update(fields).eq("id", editingId)
+        : await supabase.from("routing_rules").insert({
+            ...fields,
+            company_id: companyId,
+            priority: (rawRules.length ? Math.max(...rawRules.map((r) => r.priority)) : 0) + 10,
+          });
 
       if (error) {
-        console.error("Failed to add rule:", error);
+        console.error("Failed to save rule:", error);
       } else {
-        setShowAddRule(false);
-        setNewLabel("");
-        setNewDayType("any");
-        setNewStart("17:00");
-        setNewEnd("21:00");
-        setNewChannels(["whatsapp", "email"]);
-        setNewDelay(15);
+        cancelEdit();
         fetchData();
       }
     } finally {
@@ -187,9 +224,58 @@ export default function Playbooks() {
     }
   }
 
+  /** Keep channels in CHANNEL_OPTIONS order rather than click order — the array is the
+   *  escalation ladder, and ticking "AI call" before "WhatsApp" shouldn't mean we call first. */
   function toggleChannel(ch: string) {
-    setNewChannels((prev) =>
-      prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch]
+    setNewChannels((prev) => {
+      const next = prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch];
+      return CHANNEL_OPTIONS.filter((c) => next.includes(c));
+    });
+  }
+
+  /** One form, two uses: creating a rule and editing an existing one take exactly the
+   *  same fields, so they share this rather than keeping two copies in sync. */
+  function ruleForm() {
+    return (
+      <div style={{ padding: 16, border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 10 }}>
+        <input placeholder="Rule label (e.g. Late night)" value={newLabel} onChange={(e) => setNewLabel(e.target.value)} />
+        <div style={{ display: "flex", gap: 10 }}>
+          <select value={newDayType} onChange={(e) => setNewDayType(e.target.value)} style={{ flex: 1 }}>
+            {DAY_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <select value={newStart} onChange={(e) => setNewStart(e.target.value)} style={{ flex: 1 }}>
+            {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
+          </select>
+          <span style={{ alignSelf: "center", color: "var(--muted)" }}>to</span>
+          <select value={newEnd} onChange={(e) => setNewEnd(e.target.value)} style={{ flex: 1 }}>
+            {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {CHANNEL_OPTIONS.map((ch) => (
+            <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 14, cursor: "pointer" }}>
+              <input type="checkbox" checked={newChannels.includes(ch)} onChange={() => toggleChannel(ch)} />
+              {CHANNEL_LABELS[ch] ?? ch}
+            </label>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, color: "var(--muted)" }}>Wait between channels (min):</label>
+          <input type="number" value={newDelay} onChange={(e) => setNewDelay(Number(e.target.value))} style={{ width: 70 }} min={0} />
+        </div>
+        {newChannels.length > 0 && (
+          <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }}>
+            {formatChannels(newChannels, newDelay).join(" · ")}
+            {newChannels.length > 1 && " — each step is skipped if the lead has replied."}
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" onClick={saveRule} disabled={saving || !newLabel.trim() || !newChannels.length}>
+            {saving ? "Saving…" : editingId ? "Save changes" : "Save rule"}
+          </button>
+          <button className="btn" onClick={cancelEdit}>Cancel</button>
+        </div>
+      </div>
     );
   }
 
@@ -226,60 +312,37 @@ Reply in the lead's language.`;
           <p style={{ color: "var(--muted)", fontSize: 14 }}>No routing rules yet. Add one to enable after-hours automation.</p>
         )}
         {rules.map((r) => (
-          <div className="doc-row" key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>
-              <b>{r.label}</b>
-              <span style={{ color: "var(--muted)", marginLeft: 10 }}>{r.window}</span>
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {r.channels.map((c) => (
-                <span key={c} className="chip chip-lang" style={{ marginLeft: 0 }}>{c}</span>
-              ))}
-              {!isDemo && (
-                <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", marginLeft: 8 }} onClick={() => deleteRule(r.id)}>×</button>
-              )}
-            </span>
-          </div>
+          editingId === r.id ? (
+            <div key={r.id} style={{ marginTop: 14 }}>{ruleForm()}</div>
+          ) : (
+            <div className="doc-row" key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <span>
+                <b>{r.label}</b>
+                <span style={{ color: "var(--muted)", marginLeft: 10 }}>{r.window}</span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {r.channels.map((c) => (
+                  <span key={c} className="chip chip-lang" style={{ marginLeft: 0 }}>{c}</span>
+                ))}
+                {!isDemo && (
+                  <>
+                    <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px", marginLeft: 8 }}
+                      onClick={() => startEdit(r.id)}>Edit</button>
+                    <button className="btn btn-quiet" style={{ fontSize: 12, padding: "2px 8px" }}
+                      onClick={() => deleteRule(r.id)}>×</button>
+                  </>
+                )}
+              </span>
+            </div>
+          )
         ))}
 
-        {showAddRule && (
-          <div style={{ marginTop: 14, padding: 16, border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 10 }}>
-            <input placeholder="Rule label (e.g. Late night)" value={newLabel} onChange={(e) => setNewLabel(e.target.value)} />
-            <div style={{ display: "flex", gap: 10 }}>
-              <select value={newDayType} onChange={(e) => setNewDayType(e.target.value)} style={{ flex: 1 }}>
-                {DAY_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              <select value={newStart} onChange={(e) => setNewStart(e.target.value)} style={{ flex: 1 }}>
-                {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
-              </select>
-              <span style={{ alignSelf: "center", color: "var(--muted)" }}>to</span>
-              <select value={newEnd} onChange={(e) => setNewEnd(e.target.value)} style={{ flex: 1 }}>
-                {HOURS.map((h) => <option key={h} value={h}>{h}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              {CHANNEL_OPTIONS.map((ch) => (
-                <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 14, cursor: "pointer" }}>
-                  <input type="checkbox" checked={newChannels.includes(ch)} onChange={() => toggleChannel(ch)} />
-                  {ch === "whatsapp" ? "WhatsApp" : ch === "voice" ? "AI Call" : "Email"}
-                </label>
-              ))}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <label style={{ fontSize: 13, color: "var(--muted)" }}>Follow-up delay (min):</label>
-              <input type="number" value={newDelay} onChange={(e) => setNewDelay(Number(e.target.value))} style={{ width: 70 }} min={0} />
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" onClick={addRule} disabled={saving || !newLabel.trim()}>
-                {saving ? "Saving…" : "Save rule"}
-              </button>
-              <button className="btn" onClick={() => setShowAddRule(false)}>Cancel</button>
-            </div>
-          </div>
-        )}
+        {showAddRule && <div style={{ marginTop: 14 }}>{ruleForm()}</div>}
 
         <div style={{ marginTop: 14 }}>
-          {!showAddRule && <button className="btn" onClick={() => setShowAddRule(true)}>Add rule</button>}
+          {!showAddRule && !editingId && (
+            <button className="btn" onClick={() => { resetForm(); setShowAddRule(true); }}>Add rule</button>
+          )}
         </div>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
           During staffed hours (see calendar above) nothing is automated — leads go straight to your team.

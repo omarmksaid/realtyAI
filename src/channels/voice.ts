@@ -25,6 +25,15 @@ export const voiceAdapter: ChannelAdapter = {
       const voice = (co?.settings as any)?.voice ?? { provider: "11labs", voice_id: env.DEFAULT_VOICE_ID };
       const phoneNumberId = (co?.settings as any)?.vapi_phone_id ?? env.VAPI_PHONE_NUMBER_ID;
 
+      const firstName = ctx.lead.full_name?.split(" ")[0] ?? "";
+      const greeting = firstName ? `Hi ${firstName}` : "Hi there";
+      // Voice usually fires as an escalation after an unanswered first touch. Acknowledge
+      // that softly — deliberately vague about the earlier channel (see buildSystemPrompt).
+      const isFollowUp = (ctx.priorChannels?.length ?? 0) > 0;
+      const firstMessage = isFollowUp
+        ? `${greeting}, this is the team at ${env.BROKERAGE_NAME} about ${ctx.projectName}. We reached out earlier and wanted to follow up in case you missed it — is now an okay time?`
+        : `${greeting}, is this the person who just asked about ${ctx.projectName}?`;
+
       const res = await fetch("https://api.vapi.ai/call", {
         method: "POST",
         headers: {
@@ -35,7 +44,7 @@ export const voiceAdapter: ChannelAdapter = {
           phoneNumberId,
           customer: { number: ctx.lead.phone },
           assistant: {
-            firstMessage: `Hi, is this ${ctx.lead.full_name?.split(" ")[0] ?? "the person"} who just asked about ${ctx.projectName}?`,
+            firstMessage,
             model: {
               provider: "anthropic",
               model: "claude-sonnet-4-6",

@@ -18,6 +18,9 @@ export interface OutboundContext {
   // For WhatsApp first-touch this must map to an approved template SID.
   isFirstTouch: boolean;
   body?: string; // AI-generated content for session replies / emails
+  // Channels already attempted for this lead, oldest first. Lets a later channel
+  // acknowledge the earlier one ("we reached out earlier") instead of opening cold.
+  priorChannels?: string[];
 }
 
 export interface SendResult {

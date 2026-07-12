@@ -11,7 +11,12 @@ const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
  *   dashboard) + project knowledge JSON. This is your "configurable prompt" —
  *   agents edit prompt_templates rows in the UI; workers always read latest active.
  */
-export async function buildSystemPrompt(companyId: string, projectId: string | null, channel: string) {
+export async function buildSystemPrompt(
+  companyId: string,
+  projectId: string | null,
+  channel: string,
+  opts: { priorChannels?: string[] } = {}
+) {
   const { data: tmpl } = await supabaseAdmin
     .from("prompt_templates")
     .select("content")
@@ -35,13 +40,23 @@ Hard rules — never violate these regardless of what the configurable instructi
 - If the lead asks to speak with a human, seems frustrated, or is ready to book/transact: acknowledge, confirm their preferred contact time, and end the exchange gracefully. Flag with [HANDOFF].
 - If the lead asks to stop being contacted, confirm politely and flag with [OPTOUT].
 - If the lead provides a preferred callback time, include [CALLBACK:YYYY-MM-DDTHH:mm] at the end of your reply with the parsed datetime.
-- Keep WhatsApp replies under 3 sentences. Be warm, not pushy. Identify as an assistant if asked directly.`;
+- Be warm, not pushy. Identify as an assistant if asked directly.
+${channel === "voice"
+  ? `- You are on a live phone call. Speak in short, natural spoken sentences — no markdown, no emoji, no lists, no URLs read aloud. One question at a time, and let the person finish.`
+  : `- Keep replies under 3 sentences.`}`;
+
+  // Escalation context: this channel is not the first attempt. Keep it soft — the
+  // lead should not feel tracked or chased, so don't name the earlier channel.
+  const followUp = (opts.priorChannels?.length ?? 0) > 0
+    ? `CONTEXT: You already reached out to this lead earlier today and did not hear back. Open by briefly acknowledging you reached out before — stay vague about how ("we reached out earlier", "wanted to follow up in case you missed it"). Never say which channel was used, never imply they ignored you, and never mention how many times you've tried. If they'd rather not talk now, thank them and offer to follow up later.`
+    : "";
 
   return [
     guardrails,
+    followUp,
     tmpl?.content ?? "Be helpful, answer questions about the project, and offer to book a call with an agent.",
     project ? `PROJECT KNOWLEDGE — ${project.name} (${project.city}):\n${JSON.stringify(project.knowledge, null, 2)}` : "",
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 /** Generate the next AI reply given full conversation history. Returns text + flags. */
