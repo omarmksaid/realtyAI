@@ -191,10 +191,10 @@ agentRoutes.put("/company/hours", async (c) => {
   return c.json({ ok: true });
 });
 
-/* Knowledge ingestion — pasted text goes straight to chunking/embedding.
-   Uploads land in Supabase Storage first; Drive folders register a sync job.
-   The 'ingest' worker (add to worker.ts): extract text (pdf/docx/image OCR),
-   chunk ~800 tokens, embed, insert doc_chunks, flip status to 'ready'. */
+/* Knowledge ingestion — pasted text goes straight to chunking/embedding; uploads land in
+   Supabase Storage first, then register here. The 'ingest' worker extracts text
+   (pdf/docx/image), chunks ~800 tokens, embeds, inserts doc_chunks, flips status to
+   'ready' (or 'failed'). */
 agentRoutes.post("/projects/:id/knowledge/text", async (c) => {
   const projectId = c.req.param("id");
   const { name, content } = await c.req.json();
@@ -237,14 +237,27 @@ agentRoutes.delete("/projects/:projectId/knowledge/:docId", async (c) => {
   return c.json({ ok: true });
 });
 
-agentRoutes.post("/projects/:id/knowledge/drive", async (c) => {
+/* The file is already in Storage (the browser uploads it directly, under
+   companyId/projectId/…). This registers it and queues extraction. The storage path is
+   pinned to the caller's company so a crafted path can't reach another tenant's bucket
+   prefix. */
+agentRoutes.post("/projects/:id/knowledge/upload", async (c) => {
   const projectId = c.req.param("id");
-  const { folderUrl } = await c.req.json();
-  await supabaseAdmin.from("projects")
-    .update({ drive_folder_url: folderUrl }).eq("id", projectId);
+  const { name, storage_path } = await c.req.json();
+  const companyId = c.get("companyId");
+
+  if (!name || !storage_path) return c.json({ error: "name and storage_path required" }, 400);
+  if (!String(storage_path).startsWith(`${companyId}/`)) {
+    return c.json({ error: "storage_path outside company prefix" }, 403);
+  }
+
+  const { data: doc, error } = await supabaseAdmin.from("documents").insert({
+    company_id: companyId, project_id: projectId, source: "upload",
+    name, storage_path, status: "processing",
+  }).select().single();
+  if (error) return c.json({ error: error.message }, 500);
+
   const { boss } = await import("../jobs/queue");
-  await boss.send("drive-sync", { projectId });
-  // Drive sync worker: Google OAuth service account with folder shared to it ->
-  // list files -> download -> extract -> chunk/embed. Re-runs nightly via boss.schedule.
-  return c.json({ ok: true });
+  await boss.send("ingest", { documentId: doc!.id });
+  return c.json({ ok: true, documentId: doc!.id });
 });

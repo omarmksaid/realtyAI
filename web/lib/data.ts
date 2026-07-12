@@ -47,19 +47,19 @@ export const demoConversation: { lead: LeadRow; status: "ai" | "human"; turns: T
 
 export const demoProjects = [
   {
-    id: "p1", name: "The Riv", city: "Vaughan", leads30d: 84, driveLinked: true,
+    id: "p1", name: "The Riv", city: "Vaughan", leads30d: 84,
     docs: [
-      { id: "d1", name: "Floor plans — Tower A (PDF, 42 pages)", source: "drive", status: "ready" },
-      { id: "d2", name: "July price list", source: "drive", status: "ready" },
+      { id: "d1", name: "Floor plans — Tower A (PDF, 42 pages)", source: "upload", status: "ready" },
+      { id: "d2", name: "July price list", source: "upload", status: "ready" },
       { id: "d3", name: "Deposit structure memo (pasted text)", source: "text", status: "ready" },
       { id: "d4", name: "Amenity renderings (6 images)", source: "upload", status: "processing" },
     ],
   },
   {
-    id: "p2", name: "Union East", city: "Scarborough", leads30d: 51, driveLinked: false,
+    id: "p2", name: "Union East", city: "Scarborough", leads30d: 51,
     docs: [{ id: "d5", name: "Project overview (pasted text)", source: "text", status: "ready" }],
   },
-  { id: "p3", name: "Harbourline", city: "Mississauga", leads30d: 37, driveLinked: false, docs: [] },
+  { id: "p3", name: "Harbourline", city: "Mississauga", leads30d: 37, docs: [] },
 ];
 
 export const demoRules = [

@@ -7,24 +7,22 @@ import { apiFetch, getCompanyId } from "@/lib/api";
 interface Doc { id: string; name: string; source: string; status: string; content?: string }
 interface Project {
   id: string; name: string; city: string | null; leads30d: number;
-  driveLinked: boolean; docs: Doc[];
+  docs: Doc[];
 }
 
 const statusColor: Record<string, string> = { ready: "chip-ai", processing: "chip-warm" };
-const sourceIcon: Record<string, string> = { drive: "Drive", text: "Text", upload: "Upload" };
+const sourceIcon: Record<string, string> = { text: "Text", upload: "Upload" };
 
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>(isDemo ? demoProjects : []);
   const [loading, setLoading] = useState(!isDemo);
   const [open, setOpen] = useState<string | null>(isDemo ? (demoProjects[0]?.id ?? null) : null);
-  const [tab, setTab] = useState<"drive" | "text" | "upload">("drive");
+  const [tab, setTab] = useState<"text" | "upload">("text");
   const [pasteText, setPasteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [driveFolderUrls, setDriveFolderUrls] = useState<Record<string, string>>({});
-  const [linkingSaving, setLinkingSaving] = useState(false);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -81,7 +79,6 @@ export default function Projects() {
         name: r.name,
         city: r.city,
         leads30d: leadCounts[r.id] ?? 0,
-        driveLinked: false, // TODO: check projects.drive_folder_url
         docs: (docs ?? [])
           .filter((d: any) => d.project_id === r.id)
           .map((d: any) => ({ id: d.id, name: d.name, source: d.source, status: d.status, content: chunksByDoc[d.id] })),
@@ -142,26 +139,6 @@ export default function Projects() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }
-
-  async function saveDriveFolder(projectId: string) {
-    const url = driveFolderUrls[projectId]?.trim();
-    if (!url) { alert("Please enter a Google Drive folder URL"); return; }
-    if (isDemo) { alert("Drive sync requires backend setup"); return; }
-    setLinkingSaving(true);
-    try {
-      await apiFetch(`/agent/projects/${projectId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ drive_folder_url: url }),
-      });
-      // Update local state to show "Re-sync" next time
-      setProjects((ps) => ps.map((p) => p.id === projectId ? { ...p, driveLinked: true } : p));
-      alert("Drive folder saved. Sync will run overnight once the handler is configured.");
-    } catch (e) {
-      console.error("Failed to save drive folder", e);
-    } finally {
-      setLinkingSaving(false);
     }
   }
 
@@ -307,22 +284,9 @@ export default function Projects() {
 
               <p className="section-label">Add knowledge</p>
               <div className="tabs">
-                <button className={`tab ${tab === "drive" ? "active" : ""}`} onClick={() => setTab("drive")}>Link Google Drive folder</button>
                 <button className={`tab ${tab === "text" ? "active" : ""}`} onClick={() => setTab("text")}>Paste text</button>
                 <button className={`tab ${tab === "upload" ? "active" : ""}`} onClick={() => setTab("upload")}>Upload files</button>
               </div>
-
-              {tab === "drive" && (
-                <div style={{ display: "flex", gap: 10 }}>
-                  <input style={{ flex: 1 }} placeholder="https://drive.google.com/drive/folders/…" value={driveFolderUrls[p.id] ?? (p.driveLinked ? "https://drive.google.com/drive/folders/1xK…riv-sales" : "")} onChange={(e) => setDriveFolderUrls((prev) => ({ ...prev, [p.id]: e.target.value }))} />
-                  <button className="btn btn-primary" disabled={linkingSaving} onClick={() => saveDriveFolder(p.id)}>{p.driveLinked ? "Re-sync" : "Link folder"}</button>
-                </div>
-              )}
-              {tab === "drive" && (
-                <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8 }}>
-                  Docs, PDFs, and images in the folder sync nightly. Drop the new price sheet in Drive and the AI knows it by the next lead.
-                </p>
-              )}
 
               {tab === "text" && (
                 <>
