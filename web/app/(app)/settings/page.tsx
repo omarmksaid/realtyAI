@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { isDemo } from "@/lib/data";
-import { apiFetch, getCompanyId } from "@/lib/api";
+import { apiFetch, apiCall, getCompanyId } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
+import { useToast } from "@/lib/toast";
 
 const demoVoices = [
   { id: "v1", name: "Hope", labels: "Canadian accent · warm · mid 30s", pick: true },
@@ -39,6 +40,7 @@ export default function Settings() {
   const [searchingNumbers, setSearchingNumbers] = useState(false);
   const [buyAreaCode, setBuyAreaCode] = useState("");
   const [availableNumbers, setAvailableNumbers] = useState<{ phoneNumber: string; locality: string; region: string }[]>([]);
+  const toast = useToast();
 
   const fetchTeam = useCallback(async () => {
     if (isDemo) return;
@@ -50,20 +52,24 @@ export default function Settings() {
       const companyId = await getCompanyId();
       if (!companyId) return;
 
-      // Fetch members directly from Supabase
-      const { data: membersData } = await supabase
-        .from("memberships")
-        .select("user_id, email, role, phone, on_call")
-        .eq("company_id", companyId);
-
-      if (membersData) {
-        setMembers(membersData.map((m: any) => ({
-          user_id: m.user_id,
-          email: m.email ?? "",
-          role: m.role,
-          phone: m.phone,
-          on_call: m.on_call ?? false,
-        })));
+      // GET /team returns { members, pending }. This used to read memberships straight from
+      // Supabase and never fetch invites at all — so `pending` was populated only by the
+      // local setPending() after sending one, and vanished on every reload. The invites were
+      // in the database the whole time; the page just never asked for them.
+      try {
+        const team = await apiCall<{ members: any[]; pending: Invite[] }>("/team");
+        setMembers(
+          (team.members ?? []).map((m: any) => ({
+            user_id: m.user_id,
+            email: m.email ?? "",
+            role: m.role,
+            phone: m.phone,
+            on_call: m.on_call ?? false,
+          }))
+        );
+        setPending(team.pending ?? []);
+      } catch (e) {
+        console.error("Failed to load team", e);
       }
 
       // Fetch company WhatsApp number
@@ -140,23 +146,22 @@ export default function Settings() {
     setInviting(true);
     if (!isDemo) {
       try {
-        const res = await apiFetch("/team/invites", {
+        await apiCall("/team/invites", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: inviteEmail.trim() }),
         });
-        if (!res.ok) {
-          console.error("Failed to send invite:", res.status, await res.text());
-          alert("Couldn't send that invite. Please try again.");
-          setInviting(false);
-          return;
-        }
-        setPending((p) => [...p, { email: inviteEmail.trim(), role: "agent", expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }]);
         setInviteEmail("");
-      } catch (e) {
+        // Refetch rather than appending a guess — the local copy is what let the list drift
+        // from the database in the first place.
+        await fetchTeam();
+        toast.show(`Invite sent to ${inviteEmail.trim()}.`, "success");
+      } catch (e: any) {
         console.error("Failed to send invite", e);
-        alert("Couldn't send that invite. Please try again.");
+        toast.show(e?.message ?? "Couldn't send that invite. Please try again.");
+      } finally {
+        setInviting(false);
       }
+      return;
     } else {
       setPending((p) => [...p, { email: inviteEmail.trim(), role: "agent", expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }]);
       setInviteEmail("");
@@ -170,26 +175,15 @@ export default function Settings() {
     if (isDemo) return;
     setBusyInvite(email);
     try {
-      const res = await apiFetch("/team/invites/resend", {
+      await apiCall("/team/invites/resend", {
         method: "POST",
         body: JSON.stringify({ email }),
       });
-      if (!res.ok) {
-        console.error("Failed to resend invite:", res.status, await res.text());
-        alert("Couldn't resend that invite. Please try again.");
-        return;
-      }
-      setPending((p) =>
-        p.map((i) =>
-          i.email === email
-            ? { ...i, expires_at: new Date(Date.now() + 7 * 86400_000).toISOString() }
-            : i
-        )
-      );
-      alert(`Invite re-sent to ${email}.`);
-    } catch (e) {
+      await fetchTeam();
+      toast.show(`Invite re-sent to ${email}.`, "success");
+    } catch (e: any) {
       console.error("Failed to resend invite", e);
-      alert("Couldn't resend that invite. Please try again.");
+      toast.show(e?.message ?? "Couldn't resend that invite. Please try again.");
     } finally {
       setBusyInvite(null);
     }
@@ -200,18 +194,11 @@ export default function Settings() {
     if (!confirm(`Revoke the invite for ${email}? Their link will stop working.`)) return;
     setBusyInvite(email);
     try {
-      const res = await apiFetch(`/team/invites?email=${encodeURIComponent(email)}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        console.error("Failed to revoke invite:", res.status, await res.text());
-        alert("Couldn't revoke that invite. Please try again.");
-        return;
-      }
-      setPending((p) => p.filter((i) => i.email !== email));
-    } catch (e) {
+      await apiCall(`/team/invites?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      await fetchTeam();
+    } catch (e: any) {
       console.error("Failed to revoke invite", e);
-      alert("Couldn't revoke that invite. Please try again.");
+      toast.show(e?.message ?? "Couldn't revoke that invite. Please try again.");
     } finally {
       setBusyInvite(null);
     }
