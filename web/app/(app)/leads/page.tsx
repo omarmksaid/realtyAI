@@ -6,6 +6,20 @@ import { getCompanyId } from "@/lib/api";
 import { isDemo, demoLeads, type LeadRow, type Score } from "@/lib/data";
 
 const scoreChip = { hot: "chip-hot", warm: "chip-warm", cold: "chip-cold" } as const;
+
+/** leads.provider verbatim, made presentable. Unrecognised providers show as themselves
+ *  rather than being silently relabelled Meta. */
+const SOURCE_LABELS: Record<string, string> = {
+  meta: "Meta", facebook: "Meta", instagram: "Meta",
+  google: "Google", test: "Test", unknown: "—",
+};
+const sourceLabel = (s: string) =>
+  SOURCE_LABELS[s?.toLowerCase()] ?? (s ? s.charAt(0).toUpperCase() + s.slice(1) : "—");
+
+/** "handed_off" covers two different things: a human took the chat over, and the AI booked
+ *  a callback that a human now owes. Both need follow-up, so say so in plain words. */
+const statusLabel = (s: string) =>
+  s === "handed_off" ? "Needs follow-up" : s.replace(/_/g, " ");
 const scoreWord = { hot: "Hot", warm: "Warm", cold: "Cold" } as const;
 
 const PAGE_SIZE = 20;
@@ -30,7 +44,10 @@ function timeAgo(date: Date): string {
 }
 
 function mapRow(r: any): LeadRow {
-  const score: Score = r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : "cold";
+  // An unscored lead is not a cold lead. This used to fall back to "cold", so a lead who
+  // booked a callback showed as cold simply because scoring hadn't run yet.
+  const score: Score | null =
+    r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : null;
   const lang = r.detected_language || "en";
   const langLabels: Record<string, string> = {
     en: "English", fa: "\u0641\u0627\u0631\u0633\u06CC \u00B7 Farsi", zh: "\u4E2D\u6587 \u00B7 Mandarin",
@@ -46,7 +63,7 @@ function mapRow(r: any): LeadRow {
     phone: r.phone || "",
     email: r.email || "",
     project: r.projects?.name || "",
-    source: r.provider === "google" ? "google" : "meta",
+    source: r.provider || "unknown", // real provider — not everything is Meta
     status: r.status || "new",
     channel: r.channel || "whatsapp",
     language: lang,
@@ -123,7 +140,8 @@ export default function Leads() {
           cmp = a.project.localeCompare(b.project);
           break;
         case "score":
-          cmp = scoreOrder[a.score] - scoreOrder[b.score];
+          // Unscored leads sort below every scored one rather than ranking as cold.
+          cmp = (a.score ? scoreOrder[a.score] : -1) - (b.score ? scoreOrder[b.score] : -1);
           break;
         case "status":
           cmp = a.status.localeCompare(b.status);
@@ -238,11 +256,17 @@ export default function Leads() {
                 </td>
                 <td>{l.project}</td>
                 <td>
-                  <span className={`chip ${scoreChip[l.score]}`}>{scoreWord[l.score]}</span>
+                  {/* Blank until the conversation ends and scoring runs — an unscored lead
+                      is not a cold lead. */}
+                  {l.score ? (
+                    <span className={`chip ${scoreChip[l.score]}`} title={l.scoreReason}>{scoreWord[l.score]}</span>
+                  ) : (
+                    <span style={{ color: "var(--muted)" }} title="Scored once the conversation ends">—</span>
+                  )}
                 </td>
-                <td style={{ textTransform: "capitalize" }}>{l.status.replace("_", " ")}</td>
+                <td style={{ textTransform: "capitalize" }}>{statusLabel(l.status)}</td>
                 <td><span className="chip chip-lang">{l.langLabel}</span></td>
-                <td style={{ textTransform: "capitalize", color: "var(--muted)" }}>{l.source}</td>
+                <td style={{ color: "var(--muted)" }}>{sourceLabel(l.source)}</td>
                 <td style={{ color: "var(--muted)" }} title={l.receivedRaw ? new Date(l.receivedRaw).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : ""}>{l.receivedAt}</td>
               </tr>
             ))}

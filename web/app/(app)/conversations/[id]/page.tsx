@@ -27,14 +27,24 @@ function formatDuration(sec: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** leads.provider verbatim. Anything not "google" used to be displayed as Meta. */
+const SOURCE_LABELS: Record<string, string> = {
+  meta: "Meta", facebook: "Meta", instagram: "Meta",
+  google: "Google", test: "Test", unknown: "—",
+};
+const sourceLabel = (s: string) =>
+  SOURCE_LABELS[s?.toLowerCase()] ?? (s ? s.charAt(0).toUpperCase() + s.slice(1) : "—");
+
 function mapLead(r: any): LeadRow {
   const lang = r.detected_language || "en";
-  const score: Score = r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : "cold";
+  // null, not "cold" — an unscored lead hasn't been judged yet.
+  const score: Score | null =
+    r.score === "hot" || r.score === "warm" || r.score === "cold" ? r.score : null;
   return {
     id: r.id,
     name: r.full_name || r.name || "Unknown",
     project: r.projects?.name || r.project_name || "",
-    source: r.provider === "google" ? "google" : "meta",
+    source: r.provider || "unknown",
     status: r.status || "new",
     channel: r.channel || "whatsapp",
     language: lang,
@@ -88,6 +98,7 @@ export default function Conversation() {
   const [leadRaw, setLeadRaw] = useState<any>(null);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [convChannels, setConvChannels] = useState<Record<string, string>>({});
+  const [callback, setCallback] = useState<{ requested_time: string } | null>(null);
 
   useEffect(() => {
     if (isDemo) return;
@@ -110,6 +121,17 @@ export default function Conversation() {
           setLead(mapLead(leadData));
           setLeadRaw(leadData);
         }
+
+        // A lead is "handed_off" both when a human takes the chat over and when the AI books
+        // a callback on a call. Fetch the callback so the status can say which one happened.
+        const { data: cbs } = await supabase
+          .from("callbacks")
+          .select("requested_time")
+          .eq("lead_id", id)
+          .eq("status", "pending")
+          .order("requested_time", { ascending: true })
+          .limit(1);
+        if (cbs?.length && !cancelled) setCallback(cbs[0] as any);
 
         // Fetch all conversations for this lead
         const { data: convos } = await supabase
@@ -276,11 +298,20 @@ export default function Conversation() {
         )}
         <div>
           <div className="section-label" style={{ marginBottom: 4 }}>Source</div>
-          <span style={{ fontSize: 14, textTransform: "capitalize" }}>{lead.source}</span>
+          <span style={{ fontSize: 14 }}>{sourceLabel(lead.source)}</span>
         </div>
         <div>
           <div className="section-label" style={{ marginBottom: 4 }}>Status</div>
-          <span style={{ fontSize: 14, textTransform: "capitalize" }}>{lead.status}</span>
+          {/* "handed_off" means a human owes this lead something — say which thing. */}
+          <span style={{ fontSize: 14, textTransform: "capitalize" }}>
+            {callback
+              ? `Callback booked · ${new Date(callback.requested_time).toLocaleString("en-US", {
+                  weekday: "short", hour: "numeric", minute: "2-digit", hour12: true,
+                })}`
+              : lead.status === "handed_off"
+                ? "Needs follow-up"
+                : lead.status.replace(/_/g, " ")}
+          </span>
         </div>
         <div>
           <div className="section-label" style={{ marginBottom: 4 }}>Received</div>

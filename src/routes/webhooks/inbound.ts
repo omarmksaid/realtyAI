@@ -256,17 +256,25 @@ async function extractCallIntent(
     .map((t) => `${t.role === "user" ? "Lead" : "Agent"}: ${stripControlTags(t.message)}`)
     .join("\n");
 
+  // Scoring lives inside generateReply(), which only the text path calls — Vapi runs the
+  // call itself, so a lead who only ever spoke to us on the phone was never scored. Fold
+  // score/reason/language into the same request rather than paying for a second one.
   const res = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 300,
+    max_tokens: 400,
     system:
       `You extract outcomes from a finished phone call between a real estate assistant and a lead.\n` +
       `The call happened at ${now.toFormat("cccc, MMMM d, yyyy h:mm a")} (${tz}). Resolve relative times ` +
       `like "tomorrow at 9" against that, in that timezone.\n` +
-      `Return ONLY JSON: {"callback":"YYYY-MM-DDTHH:mm"|null,"handoff":true|false,"optout":true|false,"notes":string}\n` +
+      `Return ONLY JSON: {"callback":"YYYY-MM-DDTHH:mm"|null,"handoff":true|false,"optout":true|false,` +
+      `"notes":string,"score":"hot|warm|cold","score_reason":string,"language":"ISO 639-1 code"}\n` +
       `callback: set only if the lead agreed to a specific time to be contacted.\n` +
       `handoff: true if they want a human, are ready to transact, or are frustrated.\n` +
-      `optout: true only if they asked not to be contacted again.`,
+      `optout: true only if they asked not to be contacted again.\n` +
+      `score — hot: asked about pricing/deposits/booking, wants to buy soon, comparing projects, ` +
+      `requested a callback. warm: engaged, asking questions, interested but not urgent. ` +
+      `cold: barely engaged, generic inquiry, just browsing.\n` +
+      `score_reason: one sentence. language: the language the lead actually spoke.`,
     messages: [{ role: "user", content: transcript }],
   });
 
@@ -275,7 +283,10 @@ async function extractCallIntent(
   const match = raw.text.match(/\{[\s\S]*\}/);
   if (!match) return;
 
-  let intent: { callback?: string | null; handoff?: boolean; optout?: boolean; notes?: string };
+  let intent: {
+    callback?: string | null; handoff?: boolean; optout?: boolean; notes?: string;
+    score?: string; score_reason?: string; language?: string;
+  };
   try {
     intent = JSON.parse(match[0]);
   } catch {
@@ -283,6 +294,16 @@ async function extractCallIntent(
   }
 
   const lead = convo.leads as any;
+
+  // The call is over, so this is the moment we know enough to judge the lead. Leaving it
+  // null until now is deliberate — the dashboard shows "—" rather than pretending it's cold.
+  if (intent.score && ["hot", "warm", "cold"].includes(intent.score)) {
+    await supabaseAdmin.from("leads").update({
+      score: intent.score,
+      score_reason: intent.score_reason ?? null,
+      detected_language: intent.language ?? null,
+    }).eq("id", convo.lead_id);
+  }
 
   if (intent.callback) {
     const requestedTime = DateTime.fromISO(intent.callback, { zone: tz });

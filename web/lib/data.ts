@@ -5,9 +5,13 @@
 export type Score = "hot" | "warm" | "cold";
 
 export interface LeadRow {
-  id: string; name: string; phone?: string; email?: string; project: string; source: "meta" | "google";
+  /** `source` is leads.provider verbatim — meta | google | test | whatever a future webhook
+   *  sends. It used to be typed "meta" | "google", so every other provider was displayed as
+   *  Meta. Don't narrow it again; label unknown values instead of guessing. */
+  id: string; name: string; phone?: string; email?: string; project: string; source: string;
   status: string; channel: string; language: string; langLabel: string;
-  score: Score; scoreReason: string; receivedAt: string; receivedRaw?: string;
+  /** null until the conversation ends and scoring runs. Not the same as "cold". */
+  score: Score | null; scoreReason: string; receivedAt: string; receivedRaw?: string;
 }
 
 export interface Turn {
