@@ -22,6 +22,7 @@ export default function Projects() {
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
+  const [openingDoc, setOpeningDoc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -119,32 +120,57 @@ export default function Projects() {
     }
   }
 
+  /** Posts the file to the API rather than straight to Supabase Storage. RLS is enabled on
+   *  storage.objects with no policy defined, so a browser-issued upload is rejected — which
+   *  is what produced the 400. The API writes it with the service-role key. */
   async function handleFileUpload(projectId: string, files: FileList | null) {
     if (!files || files.length === 0) return;
     if (isDemo) { alert("File upload requires Supabase connection"); return; }
     setUploading(true);
+    const failed: string[] = [];
     try {
-      const supabase = createClient();
-      const companyId = await getCompanyId();
-      if (!companyId) throw new Error("No company");
-
       for (const file of Array.from(files)) {
-        const path = `${companyId}/${projectId}/${Date.now()}-${file.name}`;
-        const { error: uploadErr } = await supabase.storage.from("knowledge").upload(path, file);
-        if (uploadErr) { console.error("Upload error", uploadErr); continue; }
-
-        // Trigger ingestion by creating a document record via API
-        await apiFetch(`/agent/projects/${projectId}/knowledge/upload`, {
+        const body = new FormData();
+        body.append("file", file);
+        const res = await apiFetch(`/agent/projects/${projectId}/knowledge/upload`, {
           method: "POST",
-          body: JSON.stringify({ name: file.name, storage_path: path }),
+          body,
         });
+        if (!res.ok) {
+          console.error("Upload failed:", file.name, res.status, await res.text());
+          failed.push(file.name);
+        }
       }
-      fetchProjects();
+      await fetchProjects();
+      if (failed.length) alert(`Couldn't upload: ${failed.join(", ")}. Please try again.`);
     } catch (e) {
       console.error("Failed to upload files", e);
+      alert("Couldn't upload those files. Please try again.");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  /** Open the original uploaded PDF/image. The bucket is private, so a bare storage URL
+   *  404s — the API mints a short-lived signed URL scoped to the caller's company. */
+  async function viewDoc(projectId: string, docId: string) {
+    if (isDemo) return;
+    setOpeningDoc(docId);
+    try {
+      const res = await apiFetch(`/agent/projects/${projectId}/knowledge/${docId}/url`);
+      if (!res.ok) {
+        console.error("Failed to get file url:", res.status, await res.text());
+        alert("Couldn't open that file.");
+        return;
+      }
+      const { url } = await res.json();
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      console.error("Failed to open file", e);
+      alert("Couldn't open that file.");
+    } finally {
+      setOpeningDoc(null);
     }
   }
 
@@ -265,6 +291,17 @@ export default function Projects() {
                           <span className={`chip ${statusColor[d.status]}`}>
                             {d.status === "ready" ? "Ready" : "Processing…"}
                           </span>
+                          {/* Only uploads have an original file behind them; pasted text doesn't. */}
+                          {!isDemo && d.source === "upload" && (
+                            <button
+                              className="btn btn-quiet"
+                              style={{ fontSize: 12, padding: "2px 8px" }}
+                              disabled={openingDoc === d.id}
+                              onClick={(e) => { e.stopPropagation(); viewDoc(p.id, d.id); }}
+                            >
+                              {openingDoc === d.id ? "Opening…" : "View file"}
+                            </button>
+                          )}
                           {!isDemo && (
                             <button
                               className="btn btn-quiet"

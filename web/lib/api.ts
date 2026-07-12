@@ -37,8 +37,11 @@ export async function apiFetch(
     data: { session },
   } = await supabase.auth.getSession();
 
+  // FormData must set its own Content-Type (it carries the multipart boundary) —
+  // forcing application/json here makes the server fail to parse the body.
+  const isFormData = options?.body instanceof FormData;
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(options?.headers as Record<string, string>),
   };
 

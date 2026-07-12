@@ -237,27 +237,58 @@ agentRoutes.delete("/projects/:projectId/knowledge/:docId", async (c) => {
   return c.json({ ok: true });
 });
 
-/* The file is already in Storage (the browser uploads it directly, under
-   companyId/projectId/…). This registers it and queues extraction. The storage path is
-   pinned to the caller's company so a crafted path can't reach another tenant's bucket
-   prefix. */
+/* The browser posts the file here rather than straight to Storage: RLS is enabled on
+   storage.objects with no policy defined, so a browser-issued upload is denied outright.
+   supabaseAdmin bypasses RLS, so the company prefix below is what scopes the write to
+   the caller's tenant — it comes from the auth context, never from the request. */
 agentRoutes.post("/projects/:id/knowledge/upload", async (c) => {
   const projectId = c.req.param("id");
-  const { name, storage_path } = await c.req.json();
   const companyId = c.get("companyId");
 
-  if (!name || !storage_path) return c.json({ error: "name and storage_path required" }, 400);
-  if (!String(storage_path).startsWith(`${companyId}/`)) {
-    return c.json({ error: "storage_path outside company prefix" }, 403);
-  }
+  const form = await c.req.formData();
+  const file = form.get("file");
+  if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
+
+  const name = file.name || "Uploaded file";
+  const buf = Buffer.from(await file.arrayBuffer());
+  // basename only — a name like "../../other-co/x.pdf" must not escape the prefix.
+  const safeName = name.split(/[\\/]/).pop()!;
+  const storagePath = `${companyId}/${projectId}/${Date.now()}-${safeName}`;
+
+  const { error: upErr } = await supabaseAdmin.storage
+    .from("knowledge")
+    .upload(storagePath, buf, { contentType: file.type || "application/octet-stream" });
+  if (upErr) return c.json({ error: `storage: ${upErr.message}` }, 500);
 
   const { data: doc, error } = await supabaseAdmin.from("documents").insert({
     company_id: companyId, project_id: projectId, source: "upload",
-    name, storage_path, status: "processing",
+    name: safeName, storage_path: storagePath, status: "processing",
   }).select().single();
   if (error) return c.json({ error: error.message }, 500);
 
   const { boss } = await import("../jobs/queue");
   await boss.send("ingest", { documentId: doc!.id });
   return c.json({ ok: true, documentId: doc!.id });
+});
+
+/* Signed URL so the dashboard can preview/download an uploaded PDF or image. The bucket
+   is private, so a bare storage URL 404s — this mints a short-lived signed one, scoped to
+   the caller's company. */
+agentRoutes.get("/projects/:projectId/knowledge/:docId/url", async (c) => {
+  const { projectId, docId } = c.req.param();
+  const companyId = c.get("companyId");
+
+  const { data: doc } = await supabaseAdmin
+    .from("documents")
+    .select("storage_path, name")
+    .eq("id", docId).eq("project_id", projectId).eq("company_id", companyId)
+    .maybeSingle();
+  if (!doc?.storage_path) return c.json({ error: "not found" }, 404);
+
+  const { data, error } = await supabaseAdmin.storage
+    .from("knowledge")
+    .createSignedUrl(doc.storage_path, 300); // 5 minutes
+  if (error) return c.json({ error: error.message }, 500);
+
+  return c.json({ url: data.signedUrl, name: doc.name });
 });
