@@ -157,12 +157,44 @@ agentRoutes.post("/company/search-numbers", async (c) => {
   }
 });
 
-/** Buy a specific Twilio phone number. Admin only. One per company. */
+/** Import a Twilio number into Vapi so the company can place AI calls from it.
+ *
+ *  Voice needs a Vapi phoneNumberId (a UUID), NOT the E.164 string — voice.ts reads
+ *  settings.vapi_phone_id. Nothing wrote that field, so onboarding a brokerage for voice
+ *  meant importing the number in the Vapi dashboard by hand and pasting the UUID into the
+ *  database. That doesn't scale past a couple of customers and fails silently when skipped
+ *  (Vapi 400s mid-call). This does it in the same breath as buying the number, and sets the
+ *  end-of-call webhook + secret at import time so that's not a manual dashboard step either. */
+async function importNumberIntoVapi(phoneNumber: string): Promise<string | null> {
+  if (!env.VAPI_API_KEY) return null;
+  const res = await fetch("https://api.vapi.ai/phone-number", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.VAPI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      provider: "twilio",
+      number: phoneNumber,
+      twilioAccountSid: env.TWILIO_ACCOUNT_SID,
+      twilioAuthToken: env.TWILIO_AUTH_TOKEN,
+      server: {
+        url: `${env.APP_URL}/webhooks/vapi`,
+        headers: { "x-vapi-secret": env.VAPI_WEBHOOK_SECRET },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`Vapi import ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  return data.id ?? null;
+}
+
+/** Buy a specific Twilio phone number and provision it end-to-end. Admin only.
+ *  One per company. */
 agentRoutes.post("/company/buy-number", async (c) => {
   if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
   const companyId = c.get("companyId");
 
-  // Check if company already has a number
   const { data: existing } = await supabaseAdmin.from("companies").select("settings").eq("id", companyId).single();
   if ((existing?.settings as any)?.whatsapp_number) {
     return c.json({ error: "This workspace already has a phone number. Only one number per workspace is allowed." }, 400);
@@ -171,25 +203,149 @@ agentRoutes.post("/company/buy-number", async (c) => {
   const { phone_number } = await c.req.json();
   if (!phone_number) return c.json({ error: "phone_number required" }, 400);
 
+  let purchased: any;
   try {
     const twilio = (await import("twilio")).default;
     const tw = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-    const purchased = await tw.incomingPhoneNumbers.create({
+    purchased = await tw.incomingPhoneNumbers.create({
       phoneNumber: phone_number,
       smsUrl: `${env.APP_URL}/webhooks/twilio/whatsapp`,
       statusCallback: `${env.APP_URL}/webhooks/twilio/status`,
     });
+  } catch (e: any) {
+    return c.json({ error: `Couldn't buy that number: ${e.message}` }, 500);
+  }
+
+  // The number is bought and billing either way — persist it before anything else can fail,
+  // or we'd have a number on the Twilio account that no company knows about.
+  const settings: any = {
+    ...(existing?.settings ?? {}),
+    whatsapp_number: purchased.phoneNumber,
+    twilio_number_sid: purchased.sid,
+  };
+  await supabaseAdmin.from("companies").update({ settings }).eq("id", companyId);
+
+  // Voice import is best-effort: a failure here shouldn't lose the number. WhatsApp works
+  // regardless; voice stays unprovisioned and can be retried.
+  let vapiError: string | null = null;
+  try {
+    const vapiId = await importNumberIntoVapi(purchased.phoneNumber);
+    if (vapiId) {
+      settings.vapi_phone_id = vapiId;
+      await supabaseAdmin.from("companies").update({ settings }).eq("id", companyId);
+    }
+  } catch (e: any) {
+    vapiError = e.message;
+    console.error("Number bought, Vapi import failed for", companyId, e.message);
+  }
+
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"), action: "number.purchased",
+    detail: { phone_number: purchased.phoneNumber, sid: purchased.sid, vapi_phone_id: settings.vapi_phone_id ?? null, vapi_error: vapiError },
+  });
+
+  return c.json({
+    ok: true,
+    phone_number: purchased.phoneNumber,
+    voice_ready: !!settings.vapi_phone_id,
+    // Surface it rather than silently shipping a workspace that can't place calls.
+    warning: vapiError ? `Number is live for WhatsApp, but voice isn't provisioned: ${vapiError}` : null,
+  });
+});
+
+/** Retry the Vapi import for a company that already has a number. Admin only.
+ *  Voice provisioning is the step most likely to fail (or be skipped) — this makes it
+ *  recoverable without re-buying a number. */
+agentRoutes.post("/company/provision-voice", async (c) => {
+  if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);
+  const companyId = c.get("companyId");
+
+  const { data: co } = await supabaseAdmin
+    .from("companies").select("settings").eq("id", companyId).single();
+  const settings: any = co?.settings ?? {};
+  if (!settings.whatsapp_number) {
+    return c.json({ error: "Buy a phone number first." }, 400);
+  }
+  if (settings.vapi_phone_id) {
+    return c.json({ ok: true, vapi_phone_id: settings.vapi_phone_id, already: true });
+  }
+
+  try {
+    const vapiId = await importNumberIntoVapi(settings.whatsapp_number);
+    if (!vapiId) return c.json({ error: "Voice isn't configured on this platform (no VAPI_API_KEY)." }, 500);
     await supabaseAdmin.from("companies")
-      .update({ settings: { ...(existing?.settings ?? {}), whatsapp_number: purchased.phoneNumber, twilio_number_sid: purchased.sid } })
-      .eq("id", companyId);
+      .update({ settings: { ...settings, vapi_phone_id: vapiId } }).eq("id", companyId);
     await supabaseAdmin.from("audit_log").insert({
-      company_id: companyId, user_id: c.get("userId"), action: "number.purchased",
-      detail: { phone_number: purchased.phoneNumber, sid: purchased.sid },
+      company_id: companyId, user_id: c.get("userId"),
+      action: "voice.provisioned", detail: { vapi_phone_id: vapiId },
     });
-    return c.json({ ok: true, phone_number: purchased.phoneNumber });
+    return c.json({ ok: true, vapi_phone_id: vapiId });
   } catch (e: any) {
     return c.json({ error: e.message }, 500);
   }
+});
+
+/** Provisioning state for the whole workspace — what's live, what's missing, what to do.
+ *  Onboarding tens of brokerages means the manual steps have to be *visible*; today a
+ *  half-provisioned company looks identical to a working one until a lead arrives. */
+agentRoutes.get("/company/provisioning", async (c) => {
+  const { data: co } = await supabaseAdmin
+    .from("companies").select("settings").eq("id", c.get("companyId")).single();
+  const s: any = co?.settings ?? {};
+
+  const steps = [
+    {
+      key: "number",
+      label: "Phone number",
+      done: !!s.whatsapp_number,
+      detail: s.whatsapp_number ?? null,
+      blocking: true,
+      action: s.whatsapp_number ? null : "Buy a number in Settings.",
+    },
+    {
+      key: "voice",
+      label: "AI voice calls",
+      done: !!s.vapi_phone_id,
+      detail: s.vapi_phone_id ?? null,
+      blocking: false,
+      action: s.vapi_phone_id ? null : "Retry voice provisioning in Settings.",
+    },
+    {
+      key: "whatsapp_sender",
+      label: "WhatsApp sender",
+      // A number is not a WhatsApp sender. Meta has to verify the business and approve the
+      // sender — days, and not automatable from here. Until then WhatsApp sends fail (63015).
+      done: !!s.whatsapp_sender_approved,
+      detail: null,
+      blocking: false,
+      action: s.whatsapp_sender_approved ? null : "Register this number as a WhatsApp sender with Meta (business verification required).",
+    },
+    {
+      key: "templates",
+      label: "WhatsApp templates",
+      // Business-initiated WhatsApp MUST use an approved template. The SID belongs to the
+      // sender's Meta account — it can't be shared across brokerages.
+      done: !!s.first_touch_template_sid,
+      detail: s.first_touch_template_sid ?? null,
+      blocking: false,
+      action: s.first_touch_template_sid ? null : "Submit the first-touch template for approval, then save its SID.",
+    },
+    {
+      key: "hours",
+      label: "Coverage hours",
+      done: !!s.business_hours,
+      detail: null,
+      blocking: false,
+      action: s.business_hours ? null : "Set staffed hours on the Playbooks page.",
+    },
+  ];
+
+  return c.json({
+    ready: steps.filter((x) => x.blocking).every((x) => x.done),
+    voice_ready: !!s.vapi_phone_id,
+    whatsapp_ready: !!s.whatsapp_sender_approved && !!s.first_touch_template_sid,
+    steps,
+  });
 });
 
 /** Coverage calendar: replace the company's staffed-hours schedule. Admin only. */

@@ -21,16 +21,34 @@ export const whatsappAdapter: ChannelAdapter = {
   async send(ctx: OutboundContext): Promise<SendResult> {
     try {
       const to = `whatsapp:${ctx.lead.phone}`;
-      // Use per-company WhatsApp number if configured, fall back to platform default
-      let whatsappNumber = env.TWILIO_WHATSAPP_NUMBER;
-      if (ctx.lead.company_id) {
-        const { supabaseAdmin } = await import("../lib/supabase");
-        const { data: co } = await supabaseAdmin
-          .from("companies").select("settings")
-          .eq("id", ctx.lead.company_id).single();
-        const companyNumber = (co?.settings as any)?.whatsapp_number;
-        if (companyNumber) whatsappNumber = companyNumber;
+
+      // Per-company number and templates. This used to fall back to the platform's own
+      // TWILIO_WHATSAPP_NUMBER when a company wasn't provisioned — which is a real
+      // multi-tenant bug, not untidiness: an unprovisioned brokerage's leads would receive
+      // WhatsApps from OUR number, and their replies would land in a webhook we can't
+      // attribute to them. A workspace that isn't provisioned must not send at all.
+      const { supabaseAdmin } = await import("../lib/supabase");
+      const { data: co } = await supabaseAdmin
+        .from("companies").select("settings")
+        .eq("id", ctx.lead.company_id).single();
+      const settings = (co?.settings ?? {}) as any;
+
+      // Single-tenant fallback stays available for the platform's own dev/demo workspace,
+      // but only when explicitly opted in — never as a silent default for a real customer.
+      const whatsappNumber = settings.whatsapp_number
+        ?? (settings.use_platform_number ? env.TWILIO_WHATSAPP_NUMBER : null);
+      if (!whatsappNumber) {
+        return { ok: false, error: "This workspace has no WhatsApp number. Buy one in Settings." };
       }
+
+      // A template SID belongs to the sender's Meta account — it can't be shared across
+      // brokerages. Fall back to the platform template only alongside the platform number.
+      const firstTouchSid = settings.first_touch_template_sid
+        ?? (settings.use_platform_number ? env.TWILIO_FIRST_TOUCH_TEMPLATE_SID : null);
+      const reengageSid = settings.reengage_template_sid
+        ?? (settings.use_platform_number ? env.TWILIO_REENGAGE_TEMPLATE_SID : null)
+        ?? firstTouchSid;
+
       const from = `whatsapp:${whatsappNumber}`;
       const statusCallback = `${env.APP_URL}/webhooks/twilio/status`; // sent/delivered/read receipts
 
@@ -50,16 +68,29 @@ export const whatsappAdapter: ChannelAdapter = {
         inSession = !!last && Date.now() - new Date((last as any).created_at).getTime() < 24 * 3600 * 1000;
       }
 
-      const msg = ctx.isFirstTouch || !inSession
+      const needsTemplate = ctx.isFirstTouch || !inSession;
+      if (needsTemplate && !firstTouchSid) {
+        return {
+          ok: false,
+          error: "No approved WhatsApp template for this workspace. Business-initiated " +
+                 "WhatsApp must use one — submit it to Meta and save its SID in Settings.",
+        };
+      }
+
+      // The brokerage's own name, not the platform's. env.BROKERAGE_NAME is global — every
+      // tenant's template would have introduced the AI as the same company.
+      const { data: coName } = await supabaseAdmin
+        .from("companies").select("name").eq("id", ctx.lead.company_id).single();
+      const brokerageName = coName?.name || env.BROKERAGE_NAME;
+
+      const msg = needsTemplate
         ? await client.messages.create({
             to, from, statusCallback,
-            contentSid: ctx.isFirstTouch
-              ? env.TWILIO_FIRST_TOUCH_TEMPLATE_SID
-              : (env.TWILIO_REENGAGE_TEMPLATE_SID || env.TWILIO_FIRST_TOUCH_TEMPLATE_SID),
+            contentSid: ctx.isFirstTouch ? firstTouchSid! : reengageSid!,
             contentVariables: JSON.stringify({
               "1": ctx.lead.full_name?.split(" ")[0] ?? "there",
               "2": ctx.projectName || "the project",
-              "3": env.BROKERAGE_NAME,
+              "3": brokerageName,
             }),
           })
         : await client.messages.create({ to, from, statusCallback, body: ctx.body ?? "" });

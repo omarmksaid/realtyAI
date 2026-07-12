@@ -22,8 +22,22 @@ export const voiceAdapter: ChannelAdapter = {
       const { supabaseAdmin } = await import("../lib/supabase");
       const { data: co } = await supabaseAdmin
         .from("companies").select("settings").eq("id", ctx.lead.company_id).single();
-      const voice = (co?.settings as any)?.voice ?? { provider: "11labs", voice_id: env.DEFAULT_VOICE_ID };
-      const phoneNumberId = (co?.settings as any)?.vapi_phone_id ?? env.VAPI_PHONE_NUMBER_ID;
+      const settings = (co?.settings ?? {}) as any;
+      const voice = settings.voice ?? { provider: "11labs", voice_id: env.DEFAULT_VOICE_ID };
+
+      // Per-company Vapi number. This used to fall back to env.VAPI_PHONE_NUMBER_ID, so an
+      // unprovisioned brokerage would place AI calls from the PLATFORM's number — the lead
+      // sees a number unrelated to the brokerage that advertised to them, and a callback to
+      // it can't be attributed. Only the platform's own dev/demo workspace may opt in.
+      const phoneNumberId = settings.vapi_phone_id
+        ?? (settings.use_platform_number ? env.VAPI_PHONE_NUMBER_ID : null);
+      if (!phoneNumberId) {
+        return {
+          ok: false,
+          error: "Voice isn't provisioned for this workspace — its number hasn't been " +
+                 "imported into Vapi. Retry voice provisioning in Settings.",
+        };
+      }
 
       const firstName = ctx.lead.full_name?.split(" ")[0] ?? "";
       const greeting = firstName ? `Hi ${firstName}` : "Hi there";
