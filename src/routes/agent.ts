@@ -285,6 +285,45 @@ agentRoutes.post("/company/provision-voice", async (c) => {
   }
 });
 
+/** Save the WhatsApp bits that only Meta can grant: sender approval and template SIDs.
+ *  These can't be automated — Meta verifies each brokerage's business and approves each
+ *  template against the sender's own account — so the operator records them here once
+ *  they land. Until then the WhatsApp adapter refuses to send rather than falling back to
+ *  the platform's number. Admin only. */
+agentRoutes.put("/company/whatsapp-sender", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
+  const companyId = c.get("companyId");
+  const { whatsapp_sender_approved, first_touch_template_sid, reengage_template_sid } =
+    await c.req.json();
+
+  const { data: co } = await supabaseAdmin
+    .from("companies").select("settings").eq("id", companyId).single();
+  const settings: any = { ...(co?.settings ?? {}) };
+
+  // Each field is optional — this is a partial update, not a replace.
+  if (typeof whatsapp_sender_approved === "boolean") {
+    settings.whatsapp_sender_approved = whatsapp_sender_approved;
+  }
+  if (first_touch_template_sid !== undefined) {
+    settings.first_touch_template_sid = first_touch_template_sid?.trim() || null;
+  }
+  if (reengage_template_sid !== undefined) {
+    settings.reengage_template_sid = reengage_template_sid?.trim() || null;
+  }
+
+  const { error } = await supabaseAdmin.from("companies").update({ settings }).eq("id", companyId);
+  if (error) return c.json({ error: error.message }, 500);
+
+  await supabaseAdmin.from("audit_log").insert({
+    company_id: companyId, user_id: c.get("userId"), action: "whatsapp_sender.updated",
+    detail: {
+      approved: settings.whatsapp_sender_approved ?? false,
+      has_first_touch: !!settings.first_touch_template_sid,
+    },
+  });
+  return c.json({ ok: true });
+});
+
 /** Provisioning state for the whole workspace — what's live, what's missing, what to do.
  *  Onboarding tens of brokerages means the manual steps have to be *visible*; today a
  *  half-provisioned company looks identical to a working one until a lead arrives. */

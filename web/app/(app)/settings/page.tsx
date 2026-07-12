@@ -5,6 +5,7 @@ import { apiFetch, apiCall, getCompanyId } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 import { useToast } from "@/lib/toast";
 import { useRole } from "@/lib/role";
+import Provisioning from "./provisioning";
 
 const demoVoices = [
   { id: "v1", name: "Hope", labels: "Canadian accent · warm · mid 30s", pick: true },
@@ -226,6 +227,10 @@ export default function Settings() {
     <>
       <h1 className="page-title">Settings</h1>
       <p className="page-sub">Channel identity for this workspace.</p>
+
+      {/* First, because a workspace that isn't provisioned can't reach a lead at all —
+          and until now that failed silently, only surfacing when a lead arrived. */}
+      <Provisioning />
 
       <div className="card card-pad">
         <p className="section-label">Calling voice</p>
