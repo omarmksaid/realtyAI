@@ -64,6 +64,12 @@ sourcesRoutes.get("/", async (c) => {
     out.push({
       id: src.id, provider: src.provider, label: src.label,
       webhook_url: src.provider === "google" ? `${env.APP_URL}/webhooks/google?src=${src.id}` : null,
+      // The Google key is config the operator has to paste into Google Ads, not a password —
+      // and it was previously shown once in an alert() at creation and then unrecoverable
+      // from the UI. Return it so the Sources page can display it permanently.
+      // Google only: `config` also holds Meta's page access token, which must never reach
+      // the browser — that's why this doesn't just spread cfg.
+      google_key: src.provider === "google" ? (cfg.google_key ?? null) : null,
       test_received_at: cfg.test_received_at ?? null,
       default_project_id: cfg.default_project_id ?? null,
       forms: forms.map(f => ({

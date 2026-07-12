@@ -22,14 +22,14 @@ const seed = {
     ],
   },
   google: [
-    { id: "g1", name: "Lakeview 2-Bed Search", status: "Verified · test received", leads: 12, project: "Lakeview — Pickering", url: "https://api.realtyai.app/webhooks/google?src=8f2a…" },
-    { id: "g2", name: "Riv Brand Search", status: "Waiting for test data", leads: 0, project: "The Riv — Vaughan", url: "https://api.realtyai.app/webhooks/google?src=c41b…" },
+    { id: "g1", name: "Lakeview 2-Bed Search", status: "Verified · test received", leads: 12, project: "Lakeview — Pickering", project_id: "", url: "https://api.realtyai.app/webhooks/google?src=8f2a…", key: "demo-key-8f2a" },
+    { id: "g2", name: "Riv Brand Search", status: "Waiting for test data", leads: 0, project: "The Riv — Vaughan", project_id: "", url: "https://api.realtyai.app/webhooks/google?src=c41b…", key: "demo-key-c41b" },
   ],
 };
 
 interface FormRow { id: string; name: string; leads: number; last: string; project: string; project_id: string }
-interface SourceRow { id: string; provider: string; label: string; webhook_url: string | null; test_received_at: string | null; forms: FormRow[] }
-interface GoogleSourceDisplay { id: string; name: string; status: string; leads: number; project: string; project_id: string; url: string }
+interface SourceRow { id: string; provider: string; label: string; webhook_url: string | null; google_key: string | null; test_received_at: string | null; forms: FormRow[] }
+interface GoogleSourceDisplay { id: string; name: string; status: string; leads: number; project: string; project_id: string; url: string; key: string }
 interface ProjectOption { id: string; name: string }
 
 export default function Sources() {
@@ -63,6 +63,7 @@ export default function Sources() {
           provider: src.provider,
           label: src.label,
           webhook_url: src.webhook_url,
+          google_key: src.google_key ?? null,
           test_received_at: src.test_received_at,
           forms: (src.forms ?? []).map((f: any) => ({
             id: f.form_id,
@@ -97,6 +98,7 @@ export default function Sources() {
             project: defaultProjName,
             project_id: defaultProjId,
             url: s.webhook_url ?? "",
+            key: s.google_key ?? "",
           };
         }));
       }
@@ -125,6 +127,10 @@ export default function Sources() {
               project: "",
               project_id: "",
               url: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/google?src=${s.id}`,
+              // The key was only ever shown in an alert() at creation time — dismiss it and
+              // it was gone, even though it lives in the database. It's not a password; it's
+              // configuration you need again for every campaign you wire up.
+              key: (s.config as any)?.google_key ?? "",
             })));
           }
           setLive(true);
@@ -179,10 +185,8 @@ export default function Sources() {
         });
         if (!res.ok) { console.error("Failed to add source"); setAddingForm(false); return; }
         const result = await res.json();
-        // Show the google_key — user needs to paste it into Google Ads along with the URL
-        if (result.google_key) {
-          alert(`Webhook URL:\n${result.webhook_url}\n\nGoogle Key (paste as "google_key" in the webhook payload):\n${result.google_key}`);
-        }
+        // The URL and key are now shown permanently on the row below — no alert needed,
+        // and nothing is lost if the user dismisses one.
         await fetchSources();
       } else {
         // Demo mode: add locally
@@ -190,7 +194,7 @@ export default function Sources() {
         const url = `https://api.realtyai.app/webhooks/google?src=${newId.slice(0, 4)}...`;
         setGoogleDisplay((prev) => [...prev, {
           id: newId, name: newFormName, status: "Waiting for test data",
-          leads: 0, project: projects.find(p => p.id === newFormProject)?.name ?? "", project_id: newFormProject, url,
+          leads: 0, project: projects.find(p => p.id === newFormProject)?.name ?? "", project_id: newFormProject, url, key: "demo-key",
         }]);
       }
       setNewFormName("");
@@ -332,11 +336,29 @@ export default function Sources() {
                   </select>
                 </span>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <code style={{ flex: 1, fontSize: 12, background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: "8px 10px", color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.url}</code>
-                <button className="btn" style={{ fontSize: 13 }} onClick={() => handleCopy(g.url, g.id)}>
-                  {copied === g.id ? "Copied!" : "Copy"}
-                </button>
+              {/* Both values go into Google Ads → Lead form asset → Delivery options.
+                  The key is a shared secret WE generate — Google echoes it back in every
+                  webhook body and we 403 if it doesn't match. It is not issued by Google. */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: "var(--muted)", width: 74, flexShrink: 0 }}>Webhook URL</span>
+                  <code style={{ flex: 1, fontSize: 12, background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: "8px 10px", color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.url}</code>
+                  <button className="btn" style={{ fontSize: 13 }} onClick={() => handleCopy(g.url, g.id)}>
+                    {copied === g.id ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+                {g.key && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)", width: 74, flexShrink: 0 }}>Key</span>
+                    <code style={{ flex: 1, fontSize: 12, background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: "8px 10px", color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.key}</code>
+                    <button className="btn" style={{ fontSize: 13 }} onClick={() => handleCopy(g.key, `${g.id}-key`)}>
+                      {copied === `${g.id}-key` ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+                )}
+                <p style={{ fontSize: 12, color: "var(--muted)", margin: "2px 0 0" }}>
+                  Paste both into Google Ads → your lead form asset → Delivery options → Webhook.
+                </p>
               </div>
             </div>
           ))}
