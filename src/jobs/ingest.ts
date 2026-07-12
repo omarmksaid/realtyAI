@@ -29,6 +29,35 @@ async function downloadUpload(storagePath: string): Promise<Buffer> {
   return Buffer.from(await data.arrayBuffer());
 }
 
+/** What Claude is told to pull out of a project document, whatever its format. */
+const EXTRACTION_PROMPT =
+  "This is a real-estate project document (floor plan, price list, rendering, or brochure page). " +
+  "Extract every fact into plain text: unit types, square footages, room dimensions, prices, deposit " +
+  "structures, occupancy dates, amenities, orientations. Preserve tables as readable rows — a price " +
+  "sheet must keep each unit tied to its own price and size. Be exhaustive and literal; do not " +
+  "editorialize. If it's a rendering with no data, describe what it depicts in 2-3 sentences.";
+
+const textFrom = (resp: any) =>
+  resp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+
+/** Claude reads the PDF directly — text layer and visual layout both. This is what makes a
+ *  scanned brochure work: there's no text to parse, so pdf-parse returns nothing and only a
+ *  model that can see the page can read it. Limits: 32MB request, 600 pages. */
+async function readPdfWithClaude(buf: Buffer): Promise<string> {
+  const resp = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 8000,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: buf.toString("base64") } },
+        { type: "text", text: EXTRACTION_PROMPT },
+      ],
+    }] as any,
+  });
+  return textFrom(resp);
+}
+
 /** Extract text from a document based on its type. */
 async function extractText(doc: any, rawText?: string): Promise<string> {
   if (doc.source === "text") return rawText ?? "";
@@ -37,34 +66,41 @@ async function extractText(doc: any, rawText?: string): Promise<string> {
   const name: string = doc.name.toLowerCase();
 
   if (name.endsWith(".pdf")) {
-    const pdf = (await import("pdf-parse")).default;
-    const parsed = await pdf(buf);
-    if (parsed.text.trim().length > 50) return parsed.text;
-    // Scanned / image-only PDF: fall through to vision below
+    // Try the embedded text layer first — free and instant when the PDF has one.
+    // A scanned page has no text layer, so this comes back empty and we hand the
+    // whole PDF to Claude, which reads it visually. Price sheets go to Claude either
+    // way: pdf-parse flattens a table into orphaned numbers with no rows.
+    try {
+      const pdf = (await import("pdf-parse")).default;
+      const parsed = await pdf(buf);
+      if (parsed.text.trim().length > 200) return parsed.text;
+    } catch {
+      // Malformed or encrypted text layer — Claude gets a shot at it anyway.
+    }
+    return readPdfWithClaude(buf);
   }
   if (name.endsWith(".docx")) {
     const mammoth = await import("mammoth");
     const { value } = await mammoth.extractRawText({ buffer: buf });
     return value;
   }
-  if (/\.(png|jpe?g|webp|pdf)$/.test(name)) {
+  if (/\.(png|jpe?g|webp)$/.test(name)) {
     // Floor plans, renderings, price-sheet photos: Claude reads the image and
     // writes a factual description the RAG layer can retrieve. This is what makes
     // "upload the floor plan" actually answer "does Tower A have a 2-bed under 700sqft".
     const mediaType = name.endsWith(".png") ? "image/png" : name.endsWith(".webp") ? "image/webp" : "image/jpeg";
-    if (name.endsWith(".pdf")) throw new Error("scanned PDF OCR: convert pages to images first (add pdftoppm step)");
     const resp = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 1500,
+      max_tokens: 2000,
       messages: [{
         role: "user",
         content: [
           { type: "image", source: { type: "base64", media_type: mediaType, data: buf.toString("base64") } },
-          { type: "text", text: "This is a real-estate project document (floor plan, price list, rendering, or brochure page). Extract every fact into plain text: unit types, square footages, room dimensions, prices, dates, amenities, orientations. Be exhaustive and literal; do not editorialize. If it's a rendering with no data, describe what it depicts in 2-3 sentences." },
+          { type: "text", text: EXTRACTION_PROMPT },
         ],
       }],
     });
-    return resp.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
+    return textFrom(resp);
   }
   // Fallback: treat as UTF-8 text (md, txt, csv)
   return buf.toString("utf-8");
