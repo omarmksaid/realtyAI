@@ -81,18 +81,29 @@ async function extractText(doc: any, rawText?: string): Promise<string> {
   const name: string = doc.name.toLowerCase();
 
   if (name.endsWith(".pdf")) {
-    // Try the embedded text layer first — free and instant when the PDF has one.
-    // A scanned page has no text layer, so this comes back empty and we hand the
-    // whole PDF to Claude, which reads it visually. Price sheets go to Claude either
-    // way: pdf-parse flattens a table into orphaned numbers with no rows.
+    // ALWAYS through Claude. This used to short-circuit on the text layer — if pdf-parse
+    // found >200 chars it returned the raw dump and Claude never saw the file. That path
+    // was silently destroying retrieval: a fact sheet's text layer is a bare label/value
+    // list ("BUILDER\nSG Constructors"), and an embedding of that sits nowhere near the
+    // embedding of "who is the builder?". Measured: the Fast Facts chunk did not appear in
+    // the top 8 for questions it directly answers, while brochure prose containing no answer
+    // outranked it every time.
+    //
+    // Claude reads the text layer AND the visual layout, and writes each fact as a
+    // self-contained sentence (see EXTRACTION_PROMPT) — which is what makes it retrievable.
+    // It also keeps table rows intact, where pdf-parse flattens a price table into orphaned
+    // numbers. Costs a few cents per document, once, at ingest.
     try {
+      return await readPdfWithClaude(buf);
+    } catch (e) {
+      // Claude unavailable, or the PDF is too large for the API. Fall back to the raw text
+      // layer — worse for retrieval, but far better than losing the document entirely.
+      console.error("Claude PDF extraction failed, falling back to the raw text layer:", e);
       const pdf = (await import("pdf-parse")).default;
       const parsed = await pdf(buf);
-      if (parsed.text.trim().length > 200) return parsed.text;
-    } catch {
-      // Malformed or encrypted text layer — Claude gets a shot at it anyway.
+      if (parsed.text.trim().length > 50) return parsed.text;
+      throw e;
     }
-    return readPdfWithClaude(buf);
   }
   if (name.endsWith(".docx")) {
     const mammoth = await import("mammoth");
