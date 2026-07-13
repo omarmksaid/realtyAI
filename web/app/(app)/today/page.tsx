@@ -70,8 +70,6 @@ export default function Today() {
   const [stats, setStats] = useState(isDemo ? demoStats : emptyStats);
   const [digest, setDigest] = useState(isDemo ? demoDigest : emptyDigest);
   const [hot, setHot] = useState<LeadRow[]>(isDemo ? demoLeads.filter((l) => l.score === "hot") : []);
-  const [spend, setSpend] = useState(isDemo ? "$247" : "$0");
-  const [spendPerLead, setSpendPerLead] = useState(isDemo ? "~$0.41/lead" : "");
   const [loading, setLoading] = useState(!isDemo);
 
   useEffect(() => {
@@ -100,22 +98,6 @@ export default function Today() {
           const engaged = recentLeads.filter(l => ["engaged", "qualified", "handed_off"].includes(l.status)).length;
           const handoffs = recentLeads.filter(l => l.status === "handed_off").length;
           setStats({ newLeads, engaged, engagementRate: newLeads ? `${Math.round(engaged / newLeads * 100)}%` : "0%", handoffs });
-        }
-
-        // Fetch this month's spend
-        const monthStart = new Date();
-        monthStart.setDate(1);
-        monthStart.setHours(0, 0, 0, 0);
-        const { data: costs } = await supabase
-          .from("cost_events")
-          .select("amount_usd")
-          .eq("company_id", companyId)
-          .gte("created_at", monthStart.toISOString());
-        if (costs) {
-          const total = costs.reduce((sum, c) => sum + c.amount_usd, 0);
-          setSpend(`$${total.toFixed(2)}`);
-          const newLeadCount = recentLeads?.length ?? 0;
-          if (newLeadCount > 0) setSpendPerLead(`~$${(total / newLeadCount).toFixed(2)}/lead`);
         }
 
         // Fetch today’s digest from Supabase
@@ -198,10 +180,6 @@ export default function Today() {
         <div className="card" style={{ padding: "20px 22px" }}>
           <div style={{ fontSize: 32, fontWeight: 700, fontFamily: '"Source Serif 4", Georgia, serif', lineHeight: 1 }}>{stats.handoffs}</div>
           <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>flagged for your team</div>
-        </div>
-        <div className="card" style={{ padding: "20px 22px" }}>
-          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: '"Source Serif 4", Georgia, serif', lineHeight: 1 }}>{spend}</div>
-          <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>spend this month{spendPerLead ? ` · ${spendPerLead}` : ""}</div>
         </div>
       </div>
 
