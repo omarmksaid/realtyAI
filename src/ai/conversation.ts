@@ -139,9 +139,19 @@ export async function generateReply(conversationId: string) {
     try {
       const [qv] = await embed([lastLeadMsg], "query");
       const { data: hits } = await supabaseAdmin.rpc("match_chunks", {
-        p_project: lead.project_id, p_embedding: qv, p_count: 5,
+        p_project: lead.project_id, p_embedding: qv, p_count: 8,
       });
-      const relevant = (hits ?? []).filter((h: any) => h.similarity > 0.35);
+
+      // The 0.35 floor was calibrated for voyage-3.5 and is wrong for voyage-4: a correct
+      // match for "who is the builder?" scores 0.278 against this corpus, so EVERY hit was
+      // being filtered out and every WhatsApp reply was generated with zero retrieved
+      // knowledge. Cosine similarity is not comparable across embedding models — the number
+      // means nothing on its own.
+      //
+      // Take the top hits by rank and use the floor only to drop true noise. Passing a
+      // marginal chunk costs a few tokens; dropping the right one costs the answer, and the
+      // guardrails stop the model inventing anything from a weak match anyway.
+      const relevant = (hits ?? []).filter((h: any) => h.similarity > 0.15).slice(0, 5);
       if (relevant.length) {
         system += "\n\nRELEVANT PROJECT DOCUMENTS (retrieved for this question — treat as PROJECT KNOWLEDGE):\n" +
           relevant.map((h: any) => "---\n" + h.content).join("\n");

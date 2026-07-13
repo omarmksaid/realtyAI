@@ -29,13 +29,28 @@ async function downloadUpload(storagePath: string): Promise<Buffer> {
   return Buffer.from(await data.arrayBuffer());
 }
 
-/** What Claude is told to pull out of a project document, whatever its format. */
+/** What Claude is told to pull out of a project document, whatever its format.
+ *
+ *  The "write each fact as a sentence" instruction is load-bearing, not stylistic. A spec
+ *  sheet extracts as a bare label/value list ("BUILDER / SG Constructors"), and an embedding
+ *  of that list sits nowhere near the embedding of "who is the builder?" — a conversational
+ *  question. Measured on a real Fast Facts sheet: the chunk holding the answer did not appear
+ *  in the top 8 for questions it directly answered, while the brochure's marketing prose —
+ *  which contains no answer — ranked above it every time. Facts phrased as sentences embed
+ *  close to the questions they answer. */
 const EXTRACTION_PROMPT =
-  "This is a real-estate project document (floor plan, price list, rendering, or brochure page). " +
-  "Extract every fact into plain text: unit types, square footages, room dimensions, prices, deposit " +
-  "structures, occupancy dates, amenities, orientations. Preserve tables as readable rows — a price " +
-  "sheet must keep each unit tied to its own price and size. Be exhaustive and literal; do not " +
-  "editorialize. If it's a rendering with no data, describe what it depicts in 2-3 sentences.";
+  "This is a real-estate project document (fact sheet, floor plan, price list, rendering, or " +
+  "brochure page). Extract EVERY fact: unit types, square footages, room dimensions, prices, " +
+  "deposit structures, maintenance fees, occupancy dates, parking and locker costs, amenities, " +
+  "incentives, the builder, architect, and address.\n\n" +
+  "Write each fact as a complete, self-contained sentence that names its subject — " +
+  "\"The builder is SG Constructors.\", \"Parking costs $65,000 per space.\", " +
+  "\"The building has 616 suites across towers of 34, 20, 15 and 10 storeys.\" — NOT as a bare " +
+  "label-and-value list. A reader with no other context must understand each sentence on its " +
+  "own.\n\n" +
+  "Preserve tables as readable rows, keeping each unit tied to its own price and size. Be " +
+  "exhaustive and literal: never invent, infer, or round a number that isn't written down. If " +
+  "it's a rendering with no data, describe what it depicts in 2-3 sentences.";
 
 const textFrom = (resp: any) =>
   resp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
