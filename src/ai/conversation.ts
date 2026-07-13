@@ -68,11 +68,16 @@ ${channelRules}`;
   // only shot at the facts. Inline the project's documents up front instead.
   let docs = "";
   if (isVoice && projectId) {
+    // 60, not 20: chunks are now ~1,000 chars rather than ~3,200, so a project's knowledge
+    // is spread across more of them. At 20 the cap would silently truncate the corpus and
+    // voice would lose facts it used to have. 60 × ~1k ≈ 60k chars, comfortably inside the
+    // prompt. If a brokerage ever exceeds this, voice needs real retrieval — see the
+    // pre-retrieval note in ARCHITECTURE.md.
     const { data: chunks } = await supabaseAdmin
       .from("doc_chunks")
       .select("content")
       .eq("project_id", projectId)
-      .limit(20);
+      .limit(60);
     if (chunks?.length) {
       docs = `PROJECT DOCUMENTS (treat as PROJECT KNOWLEDGE — these are the facts you may quote):\n` +
         chunks.map((c: any) => c.content).join("\n\n");

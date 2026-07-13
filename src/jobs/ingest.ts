@@ -6,12 +6,28 @@ import { env } from "../lib/env";
 
 const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
-/** Paragraph-aware chunking: ~3200 chars (~800 tokens) with 300-char overlap. */
-export function chunkText(text: string, size = 3200, overlap = 300): string[] {
-  const paras = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+/** Section- and paragraph-aware chunking: ~1000 chars with 150-char overlap.
+ *
+ *  Was 3,200 chars, which is far too coarse for fact retrieval. A fact sheet extracted to
+ *  ~5,000 chars became ONE chunk holding every fact about the building — so "when is
+ *  occupancy?" retrieved a wall of sixty unrelated facts with the occupancy line buried in
+ *  it, and the answer was diluted past the point of being usable. Retrieval was finding the
+ *  right chunk and the answer still didn't come through.
+ *
+ *  Also splits on markdown headings, because the extraction prompt emits them
+ *  ("**Building Specifications**") and they are exactly the fact-group boundaries we want a
+ *  chunk to align with. */
+export function chunkText(text: string, size = 1000, overlap = 150): string[] {
+  // Break at markdown headings first, then blank lines.
+  const blocks = text
+    .split(/\n(?=#{1,6}\s|\*\*[^*\n]+\*\*\s*$)/m)
+    .flatMap((b) => b.split(/\n{2,}/))
+    .map((p) => p.trim())
+    .filter(Boolean);
+
   const chunks: string[] = [];
   let cur = "";
-  for (const p of paras) {
+  for (const p of blocks) {
     if (cur.length + p.length + 2 > size && cur) {
       chunks.push(cur);
       cur = cur.slice(-overlap) + "\n\n" + p; // carry tail for continuity
