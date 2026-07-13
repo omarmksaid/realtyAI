@@ -98,15 +98,42 @@ sourcesRoutes.patch("/:id/mapping", async (c) => {
   }
 
   const cfg = src.config as any;
-  const map = { ...(cfg.form_project_map ?? {}) };
-  if (project_id) map[form_id] = project_id; else delete map[form_id];
-  await supabaseAdmin.from("lead_sources").update({ config: { ...cfg, form_project_map: map } }).eq("id", src.id);
+  const next = { ...cfg };
 
-  // Retroactively attach recent unmapped leads from this form (they keep their generic
-  // conversation history, but scoring/digest/RAG pick up the project from now on)
+  // No form_id means "every lead from this source goes to this project" — that's what the
+  // Google UI sends, because a Google source is one lead form, not a page full of them.
+  //
+  // This used to do `map[form_id] = project_id` regardless, and JS coerces an undefined key
+  // to the STRING "undefined" — producing {"undefined": "<project>"} and a map that never
+  // matches. Google sends form_id: 2, the lookup missed, default_project_id was never set,
+  // and every Google lead arrived with NO project: no brochure, no pricing, an AI that can't
+  // answer a single question about the listing it was calling about.
+  if (form_id === undefined || form_id === null || form_id === "") {
+    next.default_project_id = project_id ?? null;
+  } else {
+    const map = { ...(cfg.form_project_map ?? {}) };
+    if (project_id) map[String(form_id)] = project_id; else delete map[String(form_id)];
+    next.form_project_map = map;
+  }
+
+  // Clean up the "undefined" key if a previous save created one.
+  if (next.form_project_map?.undefined !== undefined) {
+    const cleaned = { ...next.form_project_map };
+    delete cleaned.undefined;
+    next.form_project_map = cleaned;
+  }
+
+  await supabaseAdmin.from("lead_sources").update({ config: next }).eq("id", src.id);
+
+  // Retroactively attach recent unmapped leads (they keep their generic conversation
+  // history, but scoring/digest/RAG pick up the project from now on).
   if (project_id) {
-    await supabaseAdmin.from("leads").update({ project_id })
-      .eq("company_id", companyId).eq("form_id", form_id).is("project_id", null);
+    let q = supabaseAdmin.from("leads").update({ project_id })
+      .eq("company_id", companyId).eq("source_id", src.id).is("project_id", null);
+    // A form-specific mapping only backfills that form's leads; a source default backfills
+    // every unmapped lead from the source.
+    if (form_id) q = q.eq("form_id", String(form_id));
+    await q;
   }
   await supabaseAdmin.from("audit_log").insert({
     company_id: companyId, user_id: c.get("userId"),
