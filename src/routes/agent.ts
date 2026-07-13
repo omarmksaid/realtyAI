@@ -387,6 +387,33 @@ agentRoutes.get("/company/provisioning", async (c) => {
   });
 });
 
+/** Run the morning briefing for THIS company, now. Admin only.
+ *
+ *  Replaces POST /webhooks/trigger-digest, which had no auth and no secret, looped over
+ *  EVERY company in the database, and returned per-company lead counts — so anyone with the
+ *  URL could run up the Anthropic bill and read back cross-tenant activity. `?email=1` also
+ *  sends it, so you can check what the team actually receives. */
+agentRoutes.post("/company/digest", async (c) => {
+  const denied = adminOnly(c); if (denied) return denied;
+  const companyId = c.get("companyId");
+
+  const { generateDigest, emailDigest } = await import("../jobs/digest");
+  const hours = Number(c.req.query("hours")) || 16;
+
+  try {
+    const result = await generateDigest(companyId, hours);
+    if ("skipped" in result) return c.json({ ok: true, skipped: result.skipped });
+
+    let emailed: any = null;
+    if (c.req.query("email") === "1") {
+      emailed = await emailDigest(companyId, result.content, result.stats);
+    }
+    return c.json({ ok: true, stats: result.stats, emailed, content: result.content });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 /** Coverage calendar: replace the company's staffed-hours schedule. Admin only. */
 agentRoutes.put("/company/hours", async (c) => {
   if (c.get("role") === "agent") return c.json({ error: "admin required" }, 403);

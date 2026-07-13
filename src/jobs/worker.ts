@@ -81,55 +81,20 @@ export async function startWorker() {
     const { data: companies } = await supabaseAdmin
       .from("companies").select("id, name, plan, billing_status, trial_ends_at");
     const { automationActive } = await import("../lib/billing");
+    const { generateDigest, emailDigest } = await import("./digest");
+
     for (const co of companies ?? []) {
       if (!automationActive(co as any)) continue;
-      const since = new Date(Date.now() - 16 * 3600 * 1000).toISOString(); // ~5pm yesterday
-
-      const { data: leads } = await supabaseAdmin
-        .from("leads").select("id, full_name, status, projects(name)")
-        .eq("company_id", co.id).gte("created_at", since);
-
-      const { data: msgs } = await supabaseAdmin
-        .from("messages")
-        .select("content, role, conversation_id, conversations(channel, lead_id)")
-        .eq("company_id", co.id).gte("created_at", since)
-        .order("created_at").limit(500);
-
-      if (!leads?.length && !msgs?.length) continue;
-
-      const resp = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1500,
-        system:
-          "You write a morning briefing for a real estate team about overnight lead activity. " +
-          "For each lead: name, project, what they asked about, sentiment, and a recommended next action. " +
-          "Lead with the hottest leads (asked about pricing, booking, deposits). Be concise and scannable.",
-        messages: [{
-          role: "user",
-          content: `Overnight leads:\n${JSON.stringify(leads)}\n\nConversation turns:\n${JSON.stringify(msgs)}`,
-        }],
-      });
-      const content = resp.content.filter(b => b.type === "text").map(b => (b as any).text).join("");
-      const { recordCost, llmCost } = await import("../lib/costs");
-      await recordCost({ companyId: co.id, category: "llm",
-        amountUsd: llmCost("claude-sonnet-4-6", resp.usage.input_tokens, resp.usage.output_tokens),
-        meta: { job: "digest" } });
-
-      const stats = {
-        new_leads: leads?.length ?? 0,
-        engaged: leads?.filter(l => ["engaged", "handed_off", "qualified"].includes(l.status)).length ?? 0,
-        by_status: Object.fromEntries(
-          Object.entries(
-            (leads ?? []).reduce<Record<string, number>>((a, l) => ((a[l.status] = (a[l.status] ?? 0) + 1), a), {})
-          )
-        ),
-      };
-
-      await supabaseAdmin.from("daily_summaries").upsert(
-        { company_id: co.id, for_date: new Date().toISOString().slice(0, 10), content, stats },
-        { onConflict: "company_id,for_date" }
-      );
-      // Optional: also email the digest to owners via emailAdapter here.
+      try {
+        const result = await generateDigest(co.id);
+        if ("skipped" in result) continue;
+        // Actually send it. This used to be a comment reading "Optional: also email the
+        // digest to owners" — so the briefing was generated, stored, and never delivered.
+        await emailDigest(co.id, result.content, result.stats);
+      } catch (e) {
+        // One company's digest failing must not stop every other company's.
+        console.error("Digest failed for", co.id, e);
+      }
     }
   });
 
