@@ -47,14 +47,36 @@ function JoinForm() {
     try {
       const supabase = createClient();
 
+      // An existing account is a NORMAL case on an invite link, not an error: the person may
+      // already have a realtyAI login, or a previous accept half-failed and left an auth user
+      // with no membership. This used to bail out on signUpError, so "user already exists"
+      // dead-ended — the account existed, the invite was still pending, and there was no way
+      // through. Sign them in and accept the invite instead.
+      let session = null;
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
-      if (signUpError) { setError(signUpError.message); setLoading(false); return; }
 
-      let session = signUpData.session;
-      if (!session) {
-        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) { setError(signInError.message); setLoading(false); return; }
+      if (signUpError) {
+        const { data: signInData, error: signInError } =
+          await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) {
+          setError(
+            /invalid login credentials/i.test(signInError.message)
+              ? "An account already exists for this email, but that password is wrong. Use your existing password, or reset it from the sign-in page."
+              : signInError.message
+          );
+          setLoading(false);
+          return;
+        }
         session = signInData.session;
+      } else {
+        session = signUpData.session;
+        // Email-confirmation flows return no session from signUp — sign in to get one.
+        if (!session) {
+          const { data: signInData, error: signInError } =
+            await supabase.auth.signInWithPassword({ email, password });
+          if (signInError) { setError(signInError.message); setLoading(false); return; }
+          session = signInData.session;
+        }
       }
 
       if (!session) { setError("Could not establish a session. Please try signing in."); setLoading(false); return; }
